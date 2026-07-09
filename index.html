@@ -10179,6 +10179,10 @@ header .ver{font-size:12px;font-weight:400;color:#aad;letter-spacing:.02em}
 .thumb .exifwarn{position:absolute;top:4px;right:4px;background:#e67e22;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px}
 /* 失敗指定 */
 .thumb .failbadge{position:absolute;top:4px;right:4px;background:#c0392b;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;z-index:2}
+/* 差分取り込み */
+.state-info{margin-top:10px;background:#eaf6ef;border:1px solid #b7e0c6;border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.6;color:#1e6b42}
+.new-filter{margin:6px 0 12px;padding:8px 10px;background:#f2fbf6;border:1px solid #cbe8d8;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:10px}
+.group.is-new{box-shadow:0 0 0 2px #16a085 inset}
 .thumb.failed{outline:3px solid #c0392b;outline-offset:-1px}
 .thumb.failed img{opacity:.45;filter:grayscale(.6)}
 .thumb{position:relative}
@@ -10244,7 +10248,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.4（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.43（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10296,6 +10300,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
       </div>
       <div class="progress-text" id="progressText"></div>
     </div>
+    <div id="stateInfo" class="state-info" style="display:none"></div>
   </div>
 
   <!-- STEP2 一覧 -->
@@ -10303,6 +10308,10 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
     <h2><span class="step">2</span>取り込み結果（ファイル名順・看板ごと）</h2>
     <p class="muted" style="margin:-4px 0 10px">写真をドラッグして別グループへ移動できます（QR看板写真は区切りなので固定）。ドラッグが使えない場合は各写真下のメニューでも移動できます。</p>
     <div class="stats" id="stats"></div>
+    <div id="newFilterBar" class="new-filter" style="display:none">
+      <label><input type="checkbox" id="chkOnlyNew" onchange="toggleShowOnlyNew(this.checked)"> 追加された写真のグループだけを表示</label>
+      <span class="muted" id="newFilterInfo"></span>
+    </div>
     <div id="groups"></div>
   </div>
 
@@ -10548,24 +10557,62 @@ async function fileOf(rec){
 }
 
 // 実際の解析処理（入力の形をそろえてから呼ぶ）
+// _pendingState がある場合は差分取り込み：JSONに載っている写真は解析せず、
+// 新しく増えた写真だけをQR走査する。
 async function ingest(items){
   photos=[];
   _d('progressWrap').classList.add('show');
   _d('cardResult').style.display='none';
   _d('cardLedger').style.display='none';
   // ファイル名の自然順で並べる（一眼は IMG_5624, IMG_5625… と連番なので撮影順になる）
-  const arr=[...items].sort((a,b)=>naturalCmp(a.name,b.name));
-  const total=arr.length;
+  const all=[...items].sort((a,b)=>naturalCmp(a.name,b.name));
+
+  // 差分取り込みの判定
+  const st=_pendingState;
+  let knownNames=null;
+  if(st){
+    knownNames = new Set(st.analyzedFiles && st.analyzedFiles.length
+      ? st.analyzedFiles
+      : st.groups.reduce((a,g)=>a.concat(g.qrFile?[g.qrFile]:[], g.files||[]), []));
+  }
+  // 既存（解析しない）と新規（解析する）に分ける。既存は元の並び、新規は末尾にまとめる。
+  const known = knownNames ? all.filter(it=>knownNames.has(it.name)) : [];
+  const fresh = knownNames ? all.filter(it=>!knownNames.has(it.name)) : all;
+
+  // photos は「既存 → 新規」の順に作る（新規は必ず末尾に付ける）
+  const ordered = known.concat(fresh);
+  ordered.forEach((it,i)=>{
+    photos.push({ id:'p'+i, name:it.name, path:it.path, file:it.file||null, handle:it.handle||null,
+                  thumb:null, qr:null, kanban:null, decodeErr:false, scanErr:'',
+                  failed:false, isNew:false });
+  });
+  const freshStart = known.length;
+  const target = photos.slice(freshStart);   // 解析対象（新規のみ、または全部）
+  const total = target.length;
   let lastErr='';
   _importCancel=false;
   const t0=performance.now();
+
+  if(knownNames){
+    for(let i=freshStart;i<photos.length;i++) photos[i].isNew=true;
+    if(!total){
+      // 増えた写真が無い → そのまま復元して終了
+      applyStateToPhotos(st);
+      _pendingState=null;
+      _d('stateInfo').textContent='新しく増えた写真はありませんでした。作業状態を復元しました。';
+      _d('progressWrap').classList.remove('show');
+      refreshAll();
+      return;
+    }
+    setProgress(0,total,`新しく増えた写真 ${total}枚を解析します（既存 ${known.length}枚は再解析しません）`);
+  }
 
   // ---- ① まず並列（Worker）で走査を試みる ----
   const nWorkers=Math.min(desiredWorkerCount(), total);
   let parallel=null;
   if(nWorkers>1 && workersUsable()){
     setProgress(0,total,`解析中（${nWorkers}並列）…`);
-    parallel=await scanAllParallel(arr, (done,name)=>{
+    parallel=await scanAllParallel(target, (done,name)=>{
       if(done%10===0 || done===total){
         let eta='';
         if(done>=20){ const per=(performance.now()-t0)/done; eta=' / 残り約'+fmtSec((total-done)*per/1000); }
@@ -10575,38 +10622,32 @@ async function ingest(items){
   }
   if(parallel){
     for(let i=0;i<total;i++){
-      const it=arr[i], r=parallel[i]||{};
-      const rec={ id:'p'+i, name:it.name, path:it.path, file:it.file||null, handle:it.handle||null,
-                  thumb:null, qr:null, kanban:null, decodeErr:false, scanErr:'' };
+      const rec=photos[freshStart+i], r=parallel[i]||{};
       if(r.err){ rec.decodeErr=true; lastErr='worker: '+r.err; }
       else { rec.qr=r.qr||null; rec.kanban=parseKanbanQR(rec.qr); }
-      photos.push(rec);
     }
   }else{
   // ---- ② フォールバック：メインスレッドで直列 ----
   for(let i=0;i<total;i++){
     if(_importCancel){ setProgress(i,total,'中断しました'); break; }
-    const it=arr[i];
+    const rec=photos[freshStart+i];
     if(i%20===0 || i===total-1){
       let eta='';
       if(i>=20){ const per=(performance.now()-t0)/i; const remain=(total-i)*per/1000; eta=' / 残り約'+fmtSec(remain); }
-      setProgress(i, total, '解析中: '+it.name+eta);
+      setProgress(i, total, '解析中: '+rec.name+eta);
     }
-    const rec={ id:'p'+i, name:it.name, path:it.path, file:it.file||null, handle:it.handle||null,
-                thumb:null, qr:null, kanban:null, decodeErr:false, scanErr:'' };
     let bmp=null, f=null;
     // ① 読み出し＋デコード（handle 方式はここで初めて読む）
     try{
       f=await fileOf(rec);
       bmp=await loadBitmap(f);
-    }catch(e){ rec.decodeErr=true; lastErr='decode: '+e.message; photos.push(rec); continue; }
+    }catch(e){ rec.decodeErr=true; lastErr='decode: '+e.message; continue; }
     // ② QR走査（サムネイルは取り込み時は作らず、表示時に遅延生成する）
     try{
       rec.qr=scanQR(bmp);
       rec.kanban=parseKanbanQR(rec.qr);
     }catch(e){ rec.scanErr=e.message; lastErr='scan: '+e.message; }
     try{ freeBitmap(bmp); }catch(e){}
-    photos.push(rec);
     // UIをたまに解放（数千枚でも固まらないよう）
     if(i%50===49) await new Promise(r=>setTimeout(r,0));
   }
@@ -10616,7 +10657,20 @@ async function ingest(items){
   const per=total?((performance.now()-t0)/total/1000).toFixed(2):'0';
   setProgress(total, total, `完了（${secs}秒 / 1枚${per}秒${parallel?` ・${nWorkers}並列`:' ・並列なし'}）`);
   setTimeout(()=>_d('progressWrap').classList.remove('show'),1200);
-  buildGroups();
+
+  if(knownNames){
+    // 既存グループを復元し、新規写真だけを独立にグループ化して末尾に足す
+    applyStateToPhotos(st);
+    const added=buildGroupsFrom(freshStart);
+    _pendingState=null;
+    _showOnlyNew=true;
+    refreshAll();
+    _d('stateInfo').textContent=`新しく増えた写真 ${total}枚を解析し、${added}件のグループを追加しました。`;
+    _d('stateInfo').style.display='';
+    scrollToNew();
+  }else{
+    buildGroups();
+  }
 }
 let _importCancel=false;
 function cancelImport(){ _importCancel=true; }
@@ -11094,28 +11148,44 @@ function _plainCanvas(bmp, outW){
 // OCR結果から看板項目を推定。engText=英数字パス、jpnText=日本語パス。
 function extractKanbanFromOCR(engText, jpnText){
   jpnText=jpnText||'';
-  const PREF=['SA','SB','SC','SD','SE','SF','SG','SH','SI','SJ','SK','SL','SM','SN','SO','SP','SS','ST','SU','SW','SX','SY','SZ','NR'];
+  const PREF2=['SA','SB','SC','SD','SE','SF','SG','SH','SI','SJ','SK','SL','SM','SN','SO','SP','SS','ST','SU','SW','SX','SY','SZ','NR'];
+  const PREF1=['P'];
+  // 遺構種別ごとの番号の桁数（看板アプリと揃える）。P=3桁、他=2桁。
+  const NUMDIGITS={ P:3 };
+  const digitsOf=t=>NUMDIGITS[t]||2;
   const JOUKYOU=['掘方完掘','掘方断面','出土状況','検出状況','設定状況','復旧状況','検出','完掘','断面','全景','近景']; // 長い順
   const HOUKOU=['北西','南西','北東','南東','北','南','東','西']; // 長い順
   const k={kenmei:'',kubun:'',t1:'',t2:'',joukyou:'',houkou:'',date:'',sha:'',shubetsu:'',biko:''};
 
-  // --- 対象1：英数字パスから。空白を除去し、全位置を走査（正規表現の消費で見逃さないため） ---
+  // --- 対象1：英数字パスから。空白は「区切り」として残す（撮影日の数字と切り分けるため） ---
+  //     ※ 他項目で使う compact（空白除去）とは別に用意する
   const compact=(engText||'').replace(/\s+/g,'').toUpperCase();
+  const spaced=(engText||'').replace(/[^0-9A-Za-z]+/g,' ').toUpperCase();
   const t1c={};
   const fixNum=s=>s.replace(/O/g,'0').replace(/[Il]/g,'1').replace(/Z/g,'2');
-  for(let i=0;i+2<=compact.length;i++){
-    const pre=compact.slice(i,i+2);
-    if(!PREF.includes(pre))continue;
-    // 接頭辞の直後から2桁→1桁の順に数字を取る
-    for(const len of [2,1]){
-      const rawNum=compact.slice(i+2,i+2+len);
-      if(rawNum.length<len)continue;
-      const num=fixNum(rawNum);
-      if(!/^\d+$/.test(num))continue;
-      const v=pre+num.padStart(2,'0');
-      t1c[v]=(t1c[v]||0)+1;
-      break; // 2桁が取れたら1桁は見ない
+  for(let i=0;i<spaced.length;i++){
+    // 2文字接頭辞を先に試す（SP01 を S+P0 と誤読しないため）
+    let pre=null, plen=0;
+    const two=spaced.slice(i,i+2);
+    if(two.length===2 && PREF2.includes(two)){ pre=two; plen=2; }
+    else {
+      const one=spaced.slice(i,i+1);
+      if(PREF1.includes(one)) { pre=one; plen=1; }
     }
+    if(!pre)continue;
+    const nd=digitsOf(pre);
+    // 接頭辞の直後にある数字列を丸ごと取る（空白・記号で止まる）。
+    // 数字列が桁数の上限を超えるときは、撮影日などが混ざったとみなし採用しない。
+    let run='';
+    for(let j=i+plen; j<spaced.length; j++){
+      const ch=spaced[j];
+      const fixed=fixNum(ch);            // O→0 などの誤読を補正
+      if(!/^\d$/.test(fixed))break;
+      run+=fixed;
+    }
+    if(!run || run.length>nd) continue;   // 数字が無い／長すぎる → 見送り
+    const v=pre+run.padStart(nd,'0');
+    t1c[v]=(t1c[v]||0)+1;
   }
   const t1best=Object.entries(t1c).sort((a,b)=>b[1]-a[1])[0];
   if(t1best)k.t1=t1best[0];
@@ -11179,6 +11249,60 @@ function buildGroups(){
   state.groups=groups;
   refreshAll();
 }
+
+// ===== 差分取り込み（追加写真だけ解析） =====
+let _showOnlyNew=false;
+
+// 保存済みJSONのグループ構成を、いま取り込んだ写真（既存分）に復元する。
+// 新規写真はここでは扱わない（buildGroupsFrom が末尾に足す）。
+function applyStateToPhotos(data){
+  const byName=new Map(photos.map(p=>[p.name,p.id]));
+  const groups=[];
+  (data.groups||[]).forEach(sg=>{
+    const g={ id:newGid(), kanban:sg.kanban||null, source:sg.source||'manual',
+      qrPhotoId:(sg.qrFile && byName.has(sg.qrFile)) ? byName.get(sg.qrFile) : null, photoIds:[] };
+    (sg.files||[]).forEach(fn=>{ if(byName.has(fn)) g.photoIds.push(byName.get(fn)); });
+    // 写真が1枚も残っていないグループは捨てる（フォルダから消された等）
+    if(g.qrPhotoId || g.photoIds.length) groups.push(g);
+  });
+  state.groups=groups;
+  // 看板写真には kanban を戻しておく（サムネのQRバッジ・台帳用）
+  groups.forEach(g=>{ if(g.qrPhotoId){ const p=photoById(g.qrPhotoId); if(p) p.kanban=g.kanban; } });
+  // 失敗指定の復元
+  const failedSet=new Set(data.failedFiles||[]);
+  photos.forEach(p=>{ p.failed = failedSet.has(p.name); });
+}
+
+// photos[startIdx..] （＝新規写真）だけを独立にグループ化して state.groups の末尾に足す。
+// 先頭が看板写真でない場合は「看板なし」グループを作る（既存グループには吸収させない）。
+function buildGroupsFrom(startIdx){
+  let added=0, current=null;
+  for(let i=startIdx;i<photos.length;i++){
+    const p=photos[i];
+    if(p.kanban){
+      current={ id:newGid(), kanban:p.kanban, source:'qr', qrPhotoId:p.id, photoIds:[], isNew:true };
+      state.groups.push(current); added++;
+    }else{
+      if(!current){
+        current={ id:newGid(), kanban:null, source:'qr', qrPhotoId:null, photoIds:[], isNew:true };
+        state.groups.push(current); added++;
+      }
+      current.photoIds.push(p.id);
+    }
+  }
+  return added;
+}
+function scrollToNew(){
+  setTimeout(()=>{
+    const el=document.querySelector('.group.is-new');
+    if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+  }, 200);
+}
+function toggleShowOnlyNew(on){
+  _showOnlyNew=!!on;
+  renderGroups();
+}
+function hasNewPhotos(){ return photos.some(p=>p.isNew); }
 
 // 表示・台帳・保存状態をまとめて更新
 function refreshAll(){
@@ -11269,13 +11393,27 @@ function renderGroups(){
   }).join('');
 
 
-  state.groups.forEach((g)=>{
-    const el=document.createElement('div'); el.className='group'; el.dataset.gid=g.id;
+  // 追加写真だけ表示するフィルタ（差分取り込み直後）
+  const nNew=photos.filter(p=>p.isNew).length;
+  const bar=_d('newFilterBar');
+  if(nNew){
+    bar.style.display='';
+    _d('chkOnlyNew').checked=_showOnlyNew;
+    const nNewG=state.groups.filter(g=>g.isNew).length;
+    _d('newFilterInfo').textContent=`（追加 ${nNew}枚 / ${nNewG}グループ）`;
+  }else{
+    bar.style.display='none';
+  }
+  const shownGroups = _showOnlyNew ? state.groups.filter(g=>g.isNew) : state.groups;
+
+  shownGroups.forEach((g)=>{
+    const el=document.createElement('div'); el.className='group'+(g.isNew?' is-new':''); el.dataset.gid=g.id;
     const k=g.kanban;
     const title = k ? _esc([k.t1,k.t2].filter(Boolean).join(' ')||'（対象未入力）') : '看板QRなしの写真';
     const sub = k ? _esc([k.joukyou, k.houkou?k.houkou+'から':'', k.kenmei].filter(Boolean).join('　')) : '直前に看板QRが無い写真（失敗・メモ等の可能性）';
     const cnt = g.photoIds.length + (g.qrPhotoId?1:0);
-    const srcBadge = g.source==='manual' ? '<span class="src-badge">手動</span>' : (g.source==='ocr' ? '<span class="src-badge" style="background:#8e44ad">OCR・要確認</span>' : '');
+    const srcBadge = (g.isNew?'<span class="src-badge" style="background:#16a085">追加</span>':'') +
+      (g.source==='manual' ? '<span class="src-badge">手動</span>' : (g.source==='ocr' ? '<span class="src-badge" style="background:#8e44ad">OCR・要確認</span>' : ''));
     el.innerHTML=`
       <div class="group-head ${k?'':'nokanban'}">
         <span class="g-title">${title} ${srcBadge}</span>
@@ -11644,10 +11782,12 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.4",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.43",
     savedAt:new Date().toISOString(),
     folder,
     failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
+    // 解析済みファイル名（次回の取り込みで、ここに無いものだけQR走査する）
+    analyzedFiles: photos.map(p=>p.name),
     groups: state.groups.map(g=>({
       kanban:g.kanban, source:g.source,
       qrFile: g.qrPhotoId ? (photoById(g.qrPhotoId)||{}).name : null,
@@ -11661,19 +11801,40 @@ function saveState(){
   a.download='作業状態_'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes())+'.json';
   a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+  // 保存したら、追加分は「既存」になる（次回の差分取り込みの基準になる）
+  photos.forEach(p=>{ p.isNew=false; });
+  state.groups.forEach(g=>{ g.isNew=false; });
+  _showOnlyNew=false;
+  _d('stateInfo').style.display='none';
+  refreshAll();
 }
+// 取り込み前に読み込んでおいた作業状態（差分取り込みに使う）
+let _pendingState=null;
+
 function loadState(ev){
   const f=ev.target.files[0]; if(!f){return;}
-  if(!photos.length){ alert('先に写真フォルダを取り込んでから、作業状態を復元してください。'); ev.target.value=''; return; }
   const rd=new FileReader();
   rd.onload=()=>{
     let data;
     try{ data=JSON.parse(rd.result); }catch(e){ alert('JSONの読み込みに失敗しました'); return; }
     if(data.kind!=='workstate' || !Array.isArray(data.groups)){ alert('作業状態のJSONではないようです。'); return; }
-    applyState(data);
+    if(photos.length){
+      // すでに写真を取り込み済み → 従来どおりその場で適用
+      applyState(data);
+    }else{
+      // 写真より先に読み込んだ → フォルダ選択時に差分だけ解析する
+      _pendingState=data;
+      const n=(data.analyzedFiles||[]).length || data.groups.reduce((a,g)=>a+(g.files||[]).length+(g.qrFile?1:0),0);
+      _d('stateInfo').textContent=`作業状態を読み込みました（解析済み ${n}枚）。続けて写真フォルダを選択してください。新しく増えた写真だけを解析します。`;
+      _d('stateInfo').style.display='';
+    }
   };
   rd.readAsText(f);
   ev.target.value='';
+}
+function clearPendingState(){
+  _pendingState=null;
+  _d('stateInfo').style.display='none';
 }
 function applyState(data){
   // ファイル名→写真id の対応
