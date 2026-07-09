@@ -10244,7 +10244,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.36（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.37（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10629,6 +10629,27 @@ function makeThumb(bmp){
 // ===== 遅延サムネイル：画面に入った写真だけ生成してキャッシュ =====
 const _thumbCache=new Map(); // id -> dataURL
 let _thumbObserver=null;
+// サムネイル生成は1枚あたり原寸デコードを伴い重い（約0.2秒）。
+// 画面に入った瞬間に何十枚も同時に走ると操作がもたつくため、少数ずつ順に処理する。
+const _thumbQueue=[]; let _thumbRunning=0; const THUMB_CONCURRENCY=2;
+function queueThumb(pid, img){
+  _thumbQueue.push({pid,img});
+  pumpThumbQueue();
+}
+function pumpThumbQueue(){
+  while(_thumbRunning<THUMB_CONCURRENCY && _thumbQueue.length){
+    const job=_thumbQueue.shift();
+    // すでに画面外なら後回し（スクロールで飛ばされた分を無駄にデコードしない）
+    _thumbRunning++;
+    makeThumbFor(job.pid).then(url=>{
+      if(url && job.img && job.img.isConnected) job.img.src=url;
+    }).catch(()=>{}).then(()=>{
+      _thumbRunning--;
+      // 次を少し遅らせてUIに息継ぎさせる
+      setTimeout(pumpThumbQueue, 0);
+    });
+  }
+}
 function ensureThumbObserver(){
   if(_thumbObserver)return;
   _thumbObserver=new IntersectionObserver((entries)=>{
@@ -10636,9 +10657,9 @@ function ensureThumbObserver(){
       if(!en.isIntersecting)return;
       const img=en.target, pid=img.dataset.pid;
       _thumbObserver.unobserve(img);
-      makeThumbFor(pid).then(url=>{ if(url) img.src=url; });
+      queueThumb(pid, img);
     });
-  }, { rootMargin:'300px' }); // 少し手前から先読み
+  }, { rootMargin:'150px' }); // 先読みは控えめに
 }
 async function makeThumbFor(pid){
   if(_thumbCache.has(pid))return _thumbCache.get(pid);
@@ -10652,9 +10673,10 @@ async function makeThumbFor(pid){
   }catch(e){ return null; }
 }
 
-// QR走査（取り込み時）：素の全面2段のみ。看板は画面いっぱいに写す運用なのでこれで十分。
-// 4隅の二値化救済は重い（1枚あたり+270ms、対象写真にも毎回かかる）ため取り込み時には行わず、
-// 読めなかった写真に対する「選択→再スキャン」(scanQRStrong) 側で実施する。
+// QR走査（取り込み時）：素の全面2段 → 右下の切り出し（素→二値化）。
+// 看板QRは右下固定なので、右下だけを切り出して拡大すれば、全面では小さすぎて
+// 読めないQRが読める（実測：この救済で拾える看板がある）。
+// 4隅すべての二値化は重いわりに追加の効果が無かったため、再スキャン側に置く。
 function scanQR(bmp){
   const w=bmp.width||bmp.naturalWidth, h=bmp.height||bmp.naturalHeight;
   const canvas=_d('work'); const ctx=canvas.getContext('2d',{willReadFrequently:true});
@@ -10666,10 +10688,24 @@ function scanQR(bmp){
     return ctx.getImageData(0,0,cw,ch);
   };
   const readId=(id,inv)=>{ const code=jsQR(id.data,id.width,id.height,{inversionAttempts:inv||'dontInvert'}); return (code&&code.data)?code.data:null; };
-  // 素の全面（1000→1200both）。看板が写っていればここでほぼ当たる。
+  // ① 素の全面（1000→1200both）
   let d=readId(grab(0,0,w,h,1000)); if(d)return d;
   d=readId(grab(0,0,w,h,1200),'attemptBoth'); if(d)return d;
+  // ② 右下を切り出して拡大。看板QRは白地に黒なので反転試行は不要（dontInvert）。
+  //    二値化は精度が上がらず遅いので取り込み時は行わない（再スキャン側で実施）。
+  const fw=w*0.42, fh=h*0.42, sx=w-fw, sy=h-fh;
+  d=readId(grab(sx,sy,fw,fh,700)); if(d)return d;
   return null;
+}
+// ImageData を Otsu で二値化（その場で書き換えて返す）
+function _otsuImageData(id){
+  const d=id.data, n=id.width*id.height, hist=new Uint32Array(256), g=new Uint8ClampedArray(n);
+  for(let i=0;i<n;i++){const v=(d[i*4]*0.299+d[i*4+1]*0.587+d[i*4+2]*0.114)|0;g[i]=v;hist[v]++;}
+  let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];
+  let sumB=0,wB=0,max=0,thr=127;
+  for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=n-wB;if(!wF)break;sumB+=t*hist[t];const mB=sumB/wB,mF=(sum-sumB)/wF,bt=wB*wF*(mB-mF)*(mB-mF);if(bt>max){max=bt;thr=t;}}
+  for(let i=0;i<n;i++){const v=g[i]<thr?0:255;d[i*4]=d[i*4+1]=d[i*4+2]=v;}
+  return id;
 }
 // 4隅を二値化して救済する走査（手動再スキャン用。取り込み時には使わない）
 function scanQRCorners(bmp){
@@ -10683,20 +10719,17 @@ function scanQRCorners(bmp){
     return ctx.getImageData(0,0,cw,ch);
   };
   const readId=id=>{ const code=jsQR(id.data,id.width,id.height,{inversionAttempts:'attemptBoth'}); return (code&&code.data)?code.data:null; };
-  const otsu=id=>{
-    const d=id.data, n=id.width*id.height, hist=new Uint32Array(256), g=new Uint8ClampedArray(n);
-    for(let i=0;i<n;i++){const v=(d[i*4]*0.299+d[i*4+1]*0.587+d[i*4+2]*0.114)|0;g[i]=v;hist[v]++;}
-    let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];
-    let sumB=0,wB=0,max=0,thr=127;
-    for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=n-wB;if(!wF)break;sumB+=t*hist[t];const mB=sumB/wB,mF=(sum-sumB)/wF,bt=wB*wF*(mB-mF)*(mB-mF);if(bt>max){max=bt;thr=t;}}
-    for(let i=0;i<n;i++){const v=g[i]<thr?0:255;d[i*4]=d[i*4+1]=d[i*4+2]=v;}
-    return id;
-  };
   const fw=w*0.42, fh=h*0.42;
-  for(const [sx,sy] of [[w-fw,h-fh],[0,h-fh],[w-fw,0],[0,0]]){
-    const d=readId(otsu(grab(sx,sy,fw,fh,700)));
-    if(d)return d;
+  // まず右下を二値化（取り込み時は素のみ試している）
+  let d0=readId(_otsuImageData(grab(w-fw,h-fh,fw,fh,700))); if(d0)return d0;
+  // 残る3隅を素→二値化で
+  for(const [sx,sy] of [[0,h-fh],[w-fw,0],[0,0]]){
+    let d=readId(grab(sx,sy,fw,fh,700)); if(d)return d;
+    d=readId(_otsuImageData(grab(sx,sy,fw,fh,700))); if(d)return d;
   }
+  // 右下をさらに大きく切り出して再挑戦
+  let d=readId(grab(w-fw,h-fh,fw,fh,1000)); if(d)return d;
+  d=readId(_otsuImageData(grab(w-fw,h-fh,fw,fh,1000))); if(d)return d;
   return null;
 }
 
@@ -11035,6 +11068,8 @@ function emptyGroups(){ return state.groups.filter(g=>!g.photoIds.length && !g.q
 
 function renderGroups(){
   _d('cardResult').style.display='';
+  // 再描画するので、前回の未処理サムネ要求は捨てる（DOMが作り直されるため）
+  _thumbQueue.length=0;
   // 統計
   const nPhoto=photos.length;
   const nQR=photos.filter(p=>p.kanban).length;
@@ -11441,7 +11476,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.36",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.37",
     savedAt:new Date().toISOString(),
     folder,
     failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
