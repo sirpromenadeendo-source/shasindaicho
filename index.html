@@ -10244,12 +10244,37 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 .compass .ctr{background:#eef2f6;border-style:dashed;color:#889;cursor:default}
 .compass button.on{background:#2c5f8a;border-color:#2c5f8a;color:#fff;font-weight:700}
 .modal-foot{padding:12px 16px;border-top:1px solid #e4ebf2;display:flex;gap:10px;justify-content:flex-end}
+/* 看板編集モーダル：左に写真ビューア、右に入力欄 */
+.grp-box{max-width:1180px}
+.grp-split{display:flex;min-height:0;flex:1;overflow:hidden}
+.grp-photo{flex:1 1 55%;min-width:0;position:relative;background:#101418;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.grp-photo canvas{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+.grp-photo canvas.drag{cursor:grabbing}
+.grp-fields{flex:1 1 45%;min-width:360px;overflow:auto}
+.edv-empty{position:absolute;color:#8a97a4;font-size:14px;display:none}
+.grp-photo.empty .edv-empty{display:block}
+.grp-photo.empty canvas{display:none}
+.edv-tools{position:absolute;left:10px;top:10px;display:flex;gap:6px;align-items:center;
+  background:rgba(16,20,24,.72);padding:6px 8px;border-radius:8px}
+.edv-tools button{background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:5px;
+  min-width:34px;padding:5px 8px;font-size:13px;cursor:pointer}
+.edv-tools button:hover{background:rgba(255,255,255,.28)}
+.edv-info{color:#c4ced8;font-size:12px;margin-left:4px;min-width:44px}
+.edv-name{position:absolute;left:10px;bottom:8px;right:10px;color:#c4ced8;font-size:12px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px #000}
+/* 画面が狭ければ上下に積む */
+@media (max-width:1000px), (max-height:620px){
+  .grp-split{flex-direction:column}
+  /* 縦積みでは写真を控えめに。入力欄の高さを確保する。 */
+  .grp-photo{flex:0 0 auto;height:34%;min-height:180px;max-height:300px}
+  .grp-fields{flex:1 1 auto;min-width:0;min-height:0}
+}
 </style>
 </head>
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.45（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.46（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10402,9 +10427,22 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 
 <!-- 看板情報 編集モーダル（選択式） -->
 <div class="modal" id="grpModal">
-  <div class="modal-box">
+  <div class="modal-box grp-box">
     <div class="modal-bar"><span class="t" id="grpModalTitle">看板情報を編集</span><button onclick="closeGroupEditor()">閉じる</button></div>
-    <div class="modal-body">
+    <div class="grp-split">
+    <div class="grp-photo" id="grpPhotoPane">
+      <canvas id="edCanvas"></canvas>
+      <div class="edv-empty" id="edvEmpty">写真がありません</div>
+      <div class="edv-tools">
+        <button onclick="edvZoom(1.25)" title="拡大">＋</button>
+        <button onclick="edvZoom(0.8)" title="縮小">−</button>
+        <button onclick="edvFit()" title="全体を表示">全体</button>
+        <button onclick="edvActual()" title="等倍">1:1</button>
+        <span class="edv-info" id="edvInfo"></span>
+      </div>
+      <div class="edv-name" id="edvName"></div>
+    </div>
+    <div class="modal-body grp-fields">
       <div class="fld-row full"><div><label class="fld">件名（他グループと共通・任意で変更可）</label><input type="text" id="ed_kenmei"></div></div>
       <div class="fld-row">
         <div><label class="fld">調査区分</label><input type="text" id="ed_kubun"></div>
@@ -10443,6 +10481,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
         </div>
         <div><label class="fld">備考</label><input type="text" id="ed_biko"></div>
       </div>
+    </div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-gray" onclick="closeGroupEditor()">キャンセル</button>
@@ -11805,7 +11844,7 @@ function loadKanbanJSON(ev){
 
 // ===== グループ看板編集モーダル（選択式・看板アプリと同じマスタ） =====
 const KANBAN_MASTERS={
-  prefix:['SA','SB','SC','SD','SE','SF','SG','SH','SI','SJ','SK','SL','SM','SN','SO','SP','SS','ST','SU','SW','SX','SY','SZ','NR'],
+  prefix:['P','SA','SB','SC','SD','SE','SF','SG','SH','SI','SJ','SK','SL','SM','SN','SO','SP','SS','ST','SU','SW','SX','SY','SZ','NR'],
   taishou2:['カマド','炉','P1','P2','P3','P4','P5','貯蔵穴'],
   joukyou:['検出','完掘','断面','掘方完掘','掘方断面','出土状況','検出状況','設定状況','復旧状況','全景','近景'],
   shubetsu:['調査','管理','測量','3D','作業風景','メモ']
@@ -11826,13 +11865,18 @@ function openGroupEditor(gid){
   _d('ed_t1').value=k.t1||''; _d('ed_t2').value=k.t2||''; _d('ed_sha').value=k.sha||''; _d('ed_biko').value=k.biko||'';
   _d('ed_num').value='';
   _editJoukyou=k.joukyou||''; _editHoukou=k.houkou||''; _editShubetsu=k.shubetsu||'';
-  // 対象1に「種別+2桁数字」が入っていれば種別を選択状態に
-  const m=(k.t1||'').match(/^([A-Z]{1,2})(\d{1,2})$/);
-  _editPrefix = (m && KANBAN_MASTERS.prefix.includes(m[1])) ? m[1] : '';
-  if(m)_d('ed_num').value=m[2].padStart(2,'0');
+  // 対象1に「種別+数字」が入っていれば種別を選択状態に（Pは3桁、他は2桁）
+  const m=(k.t1||'').match(/^([A-Z]{1,2})(\d{1,3})$/);
+  const okPrefix = m && KANBAN_MASTERS.prefix.includes(m[1])
+                   && parseInt(m[2],10) <= Math.pow(10, edDigits(m[1]))-1;
+  _editPrefix = okPrefix ? m[1] : '';
+  if(okPrefix) _d('ed_num').value=String(parseInt(m[2],10)).padStart(edDigits(m[1]),'0');
   renderEditorChips();
   _d('grpModalTitle').textContent = g.source==='manual' ? '看板情報を入力（手動グループ）' : '看板情報を編集';
   _d('grpModal').classList.add('open');
+  // モーダルが表示されてから（=表示領域の寸法が決まってから）写真を読む
+  edvClear();
+  requestAnimationFrame(()=>edvLoad(g));
 }
 function chipHtml(list, cur, fn){
   return list.map(v=>`<button class="${v===cur?'on':''}" onclick="${fn}('${_eq(v)}')">${_esc(v)}</button>`).join('');
@@ -11849,9 +11893,13 @@ function renderEditorChips(){
     : `<button class="${d===_editHoukou?'on':''}" onclick="pickHoukou('${d}')">${d}から</button>`).join('');
 }
 function pickPrefix(v){ _editPrefix=(_editPrefix===v?'':v); composeT1(); renderEditorChips(); }
+// 遺構種別ごとの番号の桁数（看板アプリと揃える）。P=3桁、他=2桁。
+const ED_NUMDIGITS={ P:3 };
+function edDigits(t){ return ED_NUMDIGITS[t]||2; }
 function composeT1(){
-  const num=_d('ed_num').value.replace(/\D/g,'').slice(0,2);
-  if(_editPrefix){ _d('ed_t1').value = num ? _editPrefix+num.padStart(2,'0') : _editPrefix; }
+  const nd=edDigits(_editPrefix);
+  const num=_d('ed_num').value.replace(/\D/g,'').slice(0,nd);
+  if(_editPrefix){ _d('ed_t1').value = num ? _editPrefix+num.padStart(nd,'0') : _editPrefix; }
 }
 function clearT1(){ _editPrefix=''; _d('ed_num').value=''; _d('ed_t1').value=''; renderEditorChips(); }
 function pickT2(v){ const cur=_d('ed_t2').value.trim(); _d('ed_t2').value=(cur===v?'':v); renderEditorChips(); }
@@ -11859,7 +11907,186 @@ function pickJoukyou(v){ _editJoukyou=(_editJoukyou===v?'':v); renderEditorChips
 function pickShubetsu(v){ _editShubetsu=(_editShubetsu===v?'':v); renderEditorChips(); }
 function pickSha(v){ const cur=_d('ed_sha').value.trim(); _d('ed_sha').value=(cur===v?'':v); renderEditorChips(); }
 function pickHoukou(d){ _editHoukou=(_editHoukou===d?'':d); renderEditorChips(); }
-function closeGroupEditor(){ _d('grpModal').classList.remove('open'); _editGid=null; }
+// ===== 編集モーダルの写真ビューア =====
+// 看板写真（無ければグループの1枚目）を表示。ホイール/ピンチで拡大、ドラッグで移動。
+// 原寸のビットマップから「今見えている範囲」だけを切り出して描くので、拡大しても劣化しない。
+let _edvBmp=null, _edvScale=1, _edvX=0, _edvY=0, _edvMinScale=1, _edvDrag=null, _edvRAF=0;
+
+function edvPane(){ return _d('grpPhotoPane'); }
+function edvCanvas(){ return _d('edCanvas'); }
+
+function edvClear(){
+  if(_edvBmp){ try{ freeBitmap(_edvBmp); }catch(e){} _edvBmp=null; }
+  _edvScale=1;_edvX=0;_edvY=0;_edvDrag=null;
+  if(_edvRAF){ cancelAnimationFrame(_edvRAF); _edvRAF=0; }
+  edvPane().classList.add('empty');
+  _d('edvName').textContent=''; _d('edvInfo').textContent='';
+}
+
+// グループの表示対象を決める：看板写真 → 無ければ1枚目
+function edvPickPhoto(g){
+  if(!g)return null;
+  if(g.qrPhotoId){ const p=photoById(g.qrPhotoId); if(p)return p; }
+  for(const id of g.photoIds){ const p=photoById(id); if(p)return p; }
+  return null;
+}
+
+async function edvLoad(g){
+  edvClear();
+  const p=edvPickPhoto(g);
+  if(!p) return;
+  _d('edvName').textContent=p.name;
+  try{
+    const f=await fileOf(p);
+    if(!f) return;
+    const bmp=await loadBitmap(f);
+    if(!bmp) return;
+    // 読み込み中に別のグループへ切り替わっていたら捨てる
+    if(!_d('grpModal').classList.contains('open')){ try{freeBitmap(bmp);}catch(e){} return; }
+    _edvBmp=bmp;
+    edvPane().classList.remove('empty');
+    edvResize();
+    edvFit();
+  }catch(e){ /* 読めなければ写真なし表示のまま */ }
+}
+
+// キャンバスの解像度を表示領域に合わせる（Retinaでもぼやけない）
+function edvResize(){
+  const c=edvCanvas(), pane=edvPane();
+  if(!c||!pane)return;
+  const w=pane.clientWidth, h=pane.clientHeight;
+  if(!w||!h)return;
+  const dpr=window.devicePixelRatio||1;
+  const nw=Math.round(w*dpr), nh=Math.round(h*dpr);
+  if(c.width!==nw||c.height!==nh){ c.width=nw; c.height=nh; }
+}
+
+function edvFit(){
+  if(!_edvBmp)return;
+  const c=edvCanvas();
+  const s=Math.min(c.width/_edvBmp.width, c.height/_edvBmp.height);
+  _edvMinScale=s; _edvScale=s;
+  _edvX=(c.width-_edvBmp.width*s)/2;
+  _edvY=(c.height-_edvBmp.height*s)/2;
+  edvDraw();
+}
+function edvActual(){
+  if(!_edvBmp)return;
+  const c=edvCanvas();
+  // 画面中央を保ったまま等倍(1画像px=1画面px)へ
+  edvZoomAt((window.devicePixelRatio||1), c.width/2, c.height/2, true);
+}
+function edvZoom(f){
+  if(!_edvBmp)return;
+  const c=edvCanvas();
+  edvZoomAt(_edvScale*f, c.width/2, c.height/2);
+}
+// cx,cy（キャンバス座標）を固定したまま倍率を変える
+function edvZoomAt(newScale, cx, cy, absolute){
+  if(!_edvBmp)return;
+  const max=(window.devicePixelRatio||1)*6;
+  const s=Math.max(_edvMinScale*0.9, Math.min(max, newScale));
+  const ix=(cx-_edvX)/_edvScale, iy=(cy-_edvY)/_edvScale;  // 画像座標
+  _edvScale=s;
+  _edvX=cx-ix*s; _edvY=cy-iy*s;
+  edvClamp(); edvDraw();
+}
+function edvClamp(){
+  const c=edvCanvas();
+  const w=_edvBmp.width*_edvScale, h=_edvBmp.height*_edvScale;
+  if(w<=c.width) _edvX=(c.width-w)/2;
+  else _edvX=Math.min(0, Math.max(c.width-w, _edvX));
+  if(h<=c.height) _edvY=(c.height-h)/2;
+  else _edvY=Math.min(0, Math.max(c.height-h, _edvY));
+}
+function edvDraw(){
+  if(_edvRAF)return;
+  _edvRAF=requestAnimationFrame(()=>{
+    _edvRAF=0;
+    const c=edvCanvas(); if(!c||!_edvBmp)return;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='#101418'; ctx.fillRect(0,0,c.width,c.height);
+    ctx.imageSmoothingEnabled = _edvScale < 1;
+    // 見えている範囲だけを原寸から切り出して描く
+    const sx=Math.max(0, -_edvX/_edvScale);
+    const sy=Math.max(0, -_edvY/_edvScale);
+    const sw=Math.min(_edvBmp.width-sx, c.width/_edvScale);
+    const sh=Math.min(_edvBmp.height-sy, c.height/_edvScale);
+    if(sw<=0||sh<=0)return;
+    const dx=Math.max(0, _edvX), dy=Math.max(0, _edvY);
+    ctx.drawImage(_edvBmp, sx,sy,sw,sh, dx,dy, sw*_edvScale, sh*_edvScale);
+    const dpr=window.devicePixelRatio||1;
+    _d('edvInfo').textContent=Math.round(_edvScale/dpr*100)+'%';
+  });
+}
+
+(function initEdv(){
+  const c=_d('edCanvas'); if(!c)return;
+  c.addEventListener('wheel', e=>{
+    if(!_edvBmp)return;
+    e.preventDefault();
+    const r=c.getBoundingClientRect(); const dpr=window.devicePixelRatio||1;
+    const cx=(e.clientX-r.left)*dpr, cy=(e.clientY-r.top)*dpr;
+    edvZoomAt(_edvScale*(e.deltaY<0?1.15:1/1.15), cx, cy);
+  }, {passive:false});
+  c.addEventListener('dblclick', e=>{
+    if(!_edvBmp)return;
+    const dpr=window.devicePixelRatio||1;
+    const r=c.getBoundingClientRect();
+    const cx=(e.clientX-r.left)*dpr, cy=(e.clientY-r.top)*dpr;
+    if(_edvScale > _edvMinScale*1.05) edvFit();
+    else edvZoomAt(dpr, cx, cy);
+  });
+  // ドラッグ移動＋2本指ピンチ
+  const pts=new Map();
+  let pinchBase=null;
+  c.addEventListener('pointerdown', e=>{
+    if(!_edvBmp)return;
+    c.setPointerCapture&&c.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===1){ _edvDrag={x:e.clientX,y:e.clientY}; c.classList.add('drag'); }
+    else if(pts.size===2){ _edvDrag=null; pinchBase=edvPinch(pts); }
+  });
+  c.addEventListener('pointermove', e=>{
+    if(!_edvBmp||!pts.has(e.pointerId))return;
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    const dpr=window.devicePixelRatio||1;
+    if(pts.size===2 && pinchBase){
+      const now=edvPinch(pts);
+      const r=c.getBoundingClientRect();
+      const cx=(now.cx-r.left)*dpr, cy=(now.cy-r.top)*dpr;
+      edvZoomAt(_edvScale*(now.d/pinchBase.d), cx, cy);
+      pinchBase=now;
+    }else if(_edvDrag){
+      _edvX += (e.clientX-_edvDrag.x)*dpr;
+      _edvY += (e.clientY-_edvDrag.y)*dpr;
+      _edvDrag={x:e.clientX,y:e.clientY};
+      edvClamp(); edvDraw();
+    }
+  });
+  const up=e=>{
+    pts.delete(e.pointerId);
+    if(pts.size<2) pinchBase=null;
+    if(pts.size===0){ _edvDrag=null; c.classList.remove('drag'); }
+  };
+  c.addEventListener('pointerup', up);
+  c.addEventListener('pointercancel', up);
+  window.addEventListener('resize', ()=>{
+    if(_d('grpModal').classList.contains('open') && _edvBmp){
+      const before=_edvScale/_edvMinScale;
+      edvResize();
+      const c2=edvCanvas();
+      _edvMinScale=Math.min(c2.width/_edvBmp.width, c2.height/_edvBmp.height);
+      edvZoomAt(_edvMinScale*before, c2.width/2, c2.height/2);
+    }
+  });
+})();
+function edvPinch(pts){
+  const [a,b]=[...pts.values()];
+  return {d:Math.hypot(a.x-b.x,a.y-b.y)||1, cx:(a.x+b.x)/2, cy:(a.y+b.y)/2};
+}
+
+function closeGroupEditor(){ _d('grpModal').classList.remove('open'); _editGid=null; edvClear(); }
 function saveGroupEditor(){
   const g=state.groups.find(x=>x.id===_editGid); if(!g){closeGroupEditor();return;}
   g.kanban={
@@ -11879,7 +12106,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.45",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.46",
     savedAt:new Date().toISOString(),
     folder,
     failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
