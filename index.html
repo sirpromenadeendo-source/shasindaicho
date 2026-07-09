@@ -10235,7 +10235,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.3（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.31（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10300,9 +10300,9 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <!-- 写真振り分け ダイアログ -->
 <div class="modal" id="sortModal">
   <div class="modal-box" style="max-width:900px">
-    <div class="modal-head">
-      <b>📁 写真振り分け（コピー＆リネーム）</b>
-      <button class="mini-btn" onclick="closeSortDialog()">✕ 閉じる</button>
+    <div class="modal-bar">
+      <span class="t">📁 写真振り分け（コピー＆リネーム）</span>
+      <button onclick="closeSortDialog()">閉じる</button>
     </div>
     <div class="modal-body">
       <div id="sortUnsupported" class="warn-box" style="display:none">
@@ -10310,7 +10310,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
         <strong>https のページ</strong>（GitHub Pages 等）から開いてください。
       </div>
       <div id="sortMain">
-        <p class="hint" style="margin-top:0">
+        <p class="muted" style="margin-top:0">
           台帳の内容にしたがって、写真を<strong>コピー</strong>しながらリネームし、フォルダに振り分けます。
           元の写真はそのまま残ります（Excelマクロ「写真振り分け」と同じ動作）。
         </p>
@@ -10332,7 +10332,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
         </div>
         <div id="sortSummary" class="sort-summary" style="display:none"></div>
         <div id="sortPreviewWrap" style="display:none">
-          <div class="tablewrap" style="max-height:320px">
+          <div class="ledger-wrap" style="max-height:320px">
             <table class="ledger">
               <thead><tr><th>元ファイル名</th><th>→</th><th>保存先（フォルダ / 新ファイル名）</th></tr></thead>
               <tbody id="sortPreviewBody"></tbody>
@@ -10344,7 +10344,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
           </div>
           <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
             <button class="btn btn-purple" id="btnRunSort" onclick="runSort()">この内容で実行する</button>
-            <span class="hint">同名ファイルが既にある場合はスキップします。</span>
+            <span class="muted">同名ファイルが既にある場合はスキップします。</span>
           </div>
         </div>
       </div>
@@ -11306,7 +11306,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.3",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.31",
     savedAt:new Date().toISOString(),
     folder,
     groups: state.groups.map(g=>({
@@ -11374,12 +11374,12 @@ let _srcDir=null, _dstDir=null, _sortPlan=null;
 function fsSupported(){ return typeof window.showDirectoryPicker==='function'; }
 function openSortDialog(){
   if(!ledgerRows.length){ alert('台帳データがありません。'); return; }
-  _d('sortModal').classList.add('show');
+  _d('sortModal').classList.add('open');
   const ok=fsSupported();
   _d('sortUnsupported').style.display= ok?'none':'';
   _d('sortMain').style.display= ok?'':'none';
 }
-function closeSortDialog(){ _d('sortModal').classList.remove('show'); }
+function closeSortDialog(){ _d('sortModal').classList.remove('open'); }
 
 // ファイル名・フォルダ名に使えない文字を除去（マクロ StrChk と同じ）
 function strChk(v){
