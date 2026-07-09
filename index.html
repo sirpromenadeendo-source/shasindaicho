@@ -10235,7 +10235,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.33（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.34（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10475,7 +10475,9 @@ async function pickImportFolder(){
   }
   _d('folderInput').click();
 }
-// フォルダハンドル配下の画像ファイルを再帰的に集める
+// フォルダハンドル配下の画像ファイルを再帰的に集める。
+// ※ ここでは getFile() を呼ばない（5000枚だと直列待ちで数十秒かかるため）。
+//    ファイルハンドルだけ集め、実際の読み出しは解析・サムネ生成の直前に行う。
 async function collectImages(dirHandle, relPath, out, rootName){
   for await (const [name, handle] of dirHandle.entries()){
     if(handle.kind==='directory'){
@@ -10483,9 +10485,8 @@ async function collectImages(dirHandle, relPath, out, rootName){
     }else{
       if(name.startsWith('._') || name==='.DS_Store') continue;
       if(!/\.(jpe?g|png|heic|heif)$/i.test(name)) continue;
-      const file=await handle.getFile();
-      // path は webkitRelativePath と同じ形（ルート名/…/ファイル名）に揃える
-      out.push({ file, name, path: [rootName].concat(relPath?relPath.split('/'):[]).concat(name).join('/') });
+      out.push({ handle, name, path: [rootName].concat(relPath?relPath.split('/'):[]).concat(name).join('/') });
+      if(out.length%200===0) setProgress(0,1,'フォルダを読み込み中… '+out.length+' 枚');
     }
   }
 }
@@ -10498,7 +10499,7 @@ async function importFromDirHandle(dirHandle){
   if(!found.length){ alert('画像ファイルが見つかりませんでした。'); _d('progressWrap').classList.remove('show'); return; }
   _importDirHandle=dirHandle;   // コピー元として保持
   _srcDir=dirHandle;
-  await ingest(found.map(x=>({file:x.file, name:x.name, path:x.path})));
+  await ingest(found);           // file は持たせず handle のまま渡す
 }
 
 async function handleFiles(fileList){
@@ -10511,6 +10512,13 @@ async function handleFiles(fileList){
   // input 経由ではフォルダハンドルが取れない
   _importDirHandle=null; _srcDir=null;
   await ingest(files.map(f=>({file:f, name:f.name, path:f.webkitRelativePath||f.name})));
+}
+
+// レコードから File を取り出す（handle 方式なら必要になった時点で読む）
+async function fileOf(rec){
+  if(rec.file) return rec.file;
+  if(rec.handle) return await rec.handle.getFile();
+  throw new Error('ファイルを読み出せません');
 }
 
 // 実際の解析処理（入力の形をそろえてから呼ぶ）
@@ -10528,16 +10536,17 @@ async function ingest(items){
   for(let i=0;i<total;i++){
     if(_importCancel){ setProgress(i,total,'中断しました'); break; }
     const it=arr[i];
-    const f=it.file;
     if(i%20===0 || i===total-1){
       let eta='';
       if(i>=20){ const per=(performance.now()-t0)/i; const remain=(total-i)*per/1000; eta=' / 残り約'+fmtSec(remain); }
       setProgress(i, total, '解析中: '+it.name+eta);
     }
-    const rec={ id:'p'+i, name:it.name, path:it.path, file:f, thumb:null, qr:null, kanban:null, decodeErr:false, scanErr:'' };
-    let bmp=null;
-    // ① デコード
+    const rec={ id:'p'+i, name:it.name, path:it.path, file:it.file||null, handle:it.handle||null,
+                thumb:null, qr:null, kanban:null, decodeErr:false, scanErr:'' };
+    let bmp=null, f=null;
+    // ① 読み出し＋デコード（handle 方式はここで初めて読む）
     try{
+      f=await fileOf(rec);
       bmp=await loadBitmap(f);
     }catch(e){ rec.decodeErr=true; lastErr='decode: '+e.message; photos.push(rec); continue; }
     // ② QR走査（サムネイルは取り込み時は作らず、表示時に遅延生成する）
@@ -10624,9 +10633,9 @@ function ensureThumbObserver(){
 }
 async function makeThumbFor(pid){
   if(_thumbCache.has(pid))return _thumbCache.get(pid);
-  const p=photoById(pid); if(!p||!p.file)return null;
+  const p=photoById(pid); if(!p||(!p.file&&!p.handle))return null;
   try{
-    const bmp=await loadBitmap(p.file);
+    const bmp=await loadBitmap(await fileOf(p));
     const url=makeThumb(bmp);
     freeBitmap(bmp);
     _thumbCache.set(pid,url);
@@ -11035,6 +11044,7 @@ function renderGroups(){
     return `<option value="${x.id}">${_esc(label)}</option>`;
   }).join('');
 
+
   state.groups.forEach((g)=>{
     const el=document.createElement('div'); el.className='group'; el.dataset.gid=g.id;
     const k=g.kanban;
@@ -11075,7 +11085,7 @@ function renderGroups(){
         ${isQR?'':`<label class="selchk" title="再スキャン用に選択"><input type="checkbox" ${_selected.has(pid)?'checked':''} onchange="toggleSelect('${pid}',this.checked)"></label>`}
         <img class="ph" data-pid="${pid}" src="${cached}" alt="" draggable="false">
         <div class="cap" title="${_esc(p.name)}">${_esc(p.name)}</div>
-        ${isQR?'':`<div class="move"><select onchange="onMove('${p.id}',this.value)"><option value="">▷ 別グループへ移動</option>${groupOptions(g)}</select></div>`}`;
+        ${isQR?'':`<div class="move"><select data-gid="${g.id}" data-pid="${p.id}" onfocus="fillGroupOptions(this)" onchange="onMove('${p.id}',this.value)"><option value="">▷ 別グループへ移動</option></select></div>`}`;
       // 未生成のサムネはObserverで表示時に生成
       if(!cached){ ensureThumbObserver(); _thumbObserver.observe(t.querySelector('img')); }
       // QR写真（区切り）は移動不可。それ以外はドラッグ可能に
@@ -11090,6 +11100,21 @@ function renderGroups(){
   });
 }
 let _dragPid=null;
+// 「別グループへ移動」の選択肢は、実際に開いたときだけ作る。
+// （全写真×全グループ分を事前生成すると 5000枚×250グループ = 125万要素で数秒固まるため）
+function fillGroupOptions(sel){
+  if(sel.dataset.filled)return;
+  const gid=sel.dataset.gid;
+  const frag=document.createDocumentFragment();
+  state.groups.forEach(x=>{
+    if(x.id===gid)return;
+    const label=x.kanban?([x.kanban.t1,x.kanban.t2].filter(Boolean).join(' ')||'（対象未入力）'):'看板なし';
+    const o=document.createElement('option'); o.value=x.id; o.textContent=label;
+    frag.appendChild(o);
+  });
+  sel.appendChild(frag);
+  sel.dataset.filled='1';
+}
 function onMove(pid,gid){ if(!gid)return; movePhoto(pid,gid); refreshAll(); }
 function addGroupAfter(gid){ const g=createManualGroup(null,gid); refreshAll(); openGroupEditor(g.id); }
 function removeGroup(gid){ if(confirm('このグループを削除しますか？（中の写真は隣のグループへ移動します）')){ deleteGroup(gid); refreshAll(); } }
@@ -11114,11 +11139,11 @@ async function rescanSelected(){
   try{ await loadOpenCV(); cvReady=true; }catch(e){ /* CLAHEのみで続行 */ }
   let found=0, failed=[];
   for(let i=0;i<ids.length;i++){
-    const pid=ids[i]; const p=photoById(pid); if(!p||!p.file)continue;
+    const pid=ids[i]; const p=photoById(pid); if(!p||(!p.file&&!p.handle))continue;
     btn.textContent=`再スキャン中… (${i+1}/${ids.length})`;
     let data=null;
     try{
-      const bmp=await loadBitmap(p.file);
+      const bmp=await loadBitmap(await fileOf(p));
       if(cvReady){ data=scanQROpenCV(bmp); }      // ① OpenCV（原寸・強力）
       if(!data){ data=scanQRStrong(bmp); }        // ② CLAHE（保険）
       freeBitmap(bmp);
@@ -11152,11 +11177,11 @@ async function ocrSelected(){
   const h=commonHeader(); // 件名・調査区分・撮影者・撮影日を既存から引き継ぐ
   let created=0, withT1=0; let firstBlankGid=null, lastGid=null;
   for(let i=0;i<ids.length;i++){
-    const pid=ids[i]; const p=photoById(pid); if(!p||!p.file)continue;
+    const pid=ids[i]; const p=photoById(pid); if(!p||(!p.file&&!p.handle))continue;
     btn.textContent= ocrReady ? `OCR中… (${i+1}/${ids.length})` : `グループ作成中… (${i+1}/${ids.length})`;
     let r=null;
     if(ocrReady){
-      try{ const bmp=await loadBitmap(p.file); r=await ocrPhoto(bmp); freeBitmap(bmp); }catch(e){}
+      try{ const bmp=await loadBitmap(await fileOf(p)); r=await ocrPhoto(bmp); freeBitmap(bmp); }catch(e){}
     }
     r=r||{};
     // OCRで読めた項目を優先し、空欄は引き継ぎ情報で補う
@@ -11266,16 +11291,15 @@ function renderLedger(){
   _d('btnXLSX').disabled = ledgerRows.length===0;
   _d('btnSort').disabled = ledgerRows.length===0;
   _d('btnSaveState').disabled = photos.length===0;
-  const tb=_d('ledgerBody'); tb.innerHTML='';
-  ledgerRows.forEach(r=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`
-      <td class="auto">${r.seq}</td><td>${_esc(r.kubun)}</td><td><b>${_esc(r.t1)}</b></td>
-      <td>${_esc(r.t2)}</td><td>${_esc(r.joukyou)}</td><td>${_esc(r.houkou)}</td>
-      <td>${_esc(r.date)}</td><td>${_esc(r.sha)}</td><td>${_esc(r.shubetsu1||'')}</td><td>${_esc(r.shubetsu)}</td>
-      <td class="auto">${_esc(r.folder)}</td><td class="auto">${_esc(r.filename)}</td><td>${_esc(r.biko)}</td>`;
-    tb.appendChild(tr);
-  });
+  const tb=_d('ledgerBody');
+  // 5000行を1行ずつ append すると再描画が重いので、まとめて流し込む
+  const html=ledgerRows.map(r=>
+    `<tr><td class="auto">${r.seq}</td><td>${_esc(r.kubun)}</td><td><b>${_esc(r.t1)}</b></td>`+
+    `<td>${_esc(r.t2)}</td><td>${_esc(r.joukyou)}</td><td>${_esc(r.houkou)}</td>`+
+    `<td>${_esc(r.date)}</td><td>${_esc(r.sha)}</td><td>${_esc(r.shubetsu1||'')}</td><td>${_esc(r.shubetsu)}</td>`+
+    `<td class="auto">${_esc(r.folder)}</td><td class="auto">${_esc(r.filename)}</td><td>${_esc(r.biko)}</td></tr>`
+  ).join('');
+  tb.innerHTML=html;
 }
 
 // ===== 日時整形 =====
@@ -11372,7 +11396,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.33",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.34",
     savedAt:new Date().toISOString(),
     folder,
     groups: state.groups.map(g=>({
