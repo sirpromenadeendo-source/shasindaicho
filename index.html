@@ -10183,6 +10183,7 @@ header .ver{font-size:12px;font-weight:400;color:#aad;letter-spacing:.02em}
 .state-info{margin-top:10px;background:#eaf6ef;border:1px solid #b7e0c6;border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.6;color:#1e6b42}
 .new-filter{margin:6px 0 12px;padding:8px 10px;background:#f2fbf6;border:1px solid #cbe8d8;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:10px}
 .group.is-new{box-shadow:0 0 0 2px #16a085 inset}
+.drag-count{position:fixed;top:-1000px;left:-1000px;background:#2c5f8a;color:#fff;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:700;white-space:nowrap;pointer-events:none}
 .thumb.failed{outline:3px solid #c0392b;outline-offset:-1px}
 .thumb.failed img{opacity:.45;filter:grayscale(.6)}
 .thumb{position:relative}
@@ -10248,7 +10249,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.43（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.44（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10393,6 +10394,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <!-- 選択再スキャン バー -->
 <div class="rescan-bar" id="rescanBar">
   <span><b id="rescanCount">0</b> 枚を選択中</span>
+  <span class="muted" style="font-size:12px">選択した写真のどれかをドラッグすると、まとめて別グループへ移動できます</span>
   <button class="btn btn-green" id="btnRescan" onclick="rescanSelected()">選択した写真を再スキャン</button>
   <button class="btn btn-blue" id="btnOCR" onclick="ocrSelected()">OCRでグループ作成</button>
   <button class="btn btn-gray" onclick="clearSelection()">選択解除</button>
@@ -11332,17 +11334,28 @@ function createManualGroup(kanban, afterGid){
   return g;
 }
 // 写真を別グループへ移動（撮影順＝photos配列順を保って挿入）
-function movePhoto(photoId, toGid){
-  for(const g of state.groups){
-    const i=g.photoIds.indexOf(photoId);
-    if(i>=0)g.photoIds.splice(i,1);
-  }
+// 移動先グループの写真をファイル名順に並べ替える
+function sortGroupPhotos(g){
+  const nameOf=id=>{ const p=photoById(id); return p?p.name:''; };
+  g.photoIds.sort((a,b)=>naturalCmp(nameOf(a), nameOf(b)));
+}
+function movePhoto(photoId, toGid){ movePhotos([photoId], toGid); }
+// 複数の写真をまとめて移動する（看板写真＝区切りは移動しない）
+function movePhotos(photoIds, toGid){
   const to=state.groups.find(g=>g.id===toGid);
-  if(!to)return;
-  to.photoIds.push(photoId);
-  // 撮影順（photos内の並び）で整列
-  const order=new Map(photos.map((p,idx)=>[p.id,idx]));
-  to.photoIds.sort((a,b)=>order.get(a)-order.get(b));
+  if(!to)return 0;
+  // 看板写真は区切りなので対象外。移動先にすでに居るものも除く。
+  const ids=photoIds.filter(id=>
+    !state.groups.some(g=>g.qrPhotoId===id) && !to.photoIds.includes(id)
+  );
+  if(!ids.length)return 0;
+  const set=new Set(ids);
+  for(const g of state.groups){
+    g.photoIds=g.photoIds.filter(id=>!set.has(id));
+  }
+  to.photoIds.push(...ids);
+  sortGroupPhotos(to);   // グループ内はファイル名順
+  return ids.length;
 }
 // グループ削除（写真は直前のグループへ退避、無ければ先頭へ）
 function deleteGroup(gid){
@@ -11428,12 +11441,21 @@ function renderGroups(){
       <div class="group-body"></div>`;
     const body=el.querySelector('.group-body');
     // グループ全体をドロップ先に
-    el.addEventListener('dragover', e=>{ if(_dragPid){ e.preventDefault(); e.dataTransfer.dropEffect='move'; el.classList.add('drop-target'); } });
+    el.addEventListener('dragover', e=>{ if(_dragIds.length){ e.preventDefault(); e.dataTransfer.dropEffect='move'; el.classList.add('drop-target'); } });
     el.addEventListener('dragleave', e=>{ if(!el.contains(e.relatedTarget)) el.classList.remove('drop-target'); });
     el.addEventListener('drop', e=>{
       e.preventDefault(); el.classList.remove('drop-target');
-      const pid=_dragPid || e.dataTransfer.getData('text/plain');
-      if(pid){ movePhoto(pid, g.id); refreshAll(); }
+      let ids=_dragIds.slice();
+      if(!ids.length){
+        const pid=e.dataTransfer.getData('text/plain');
+        if(pid) ids=[pid];
+      }
+      if(!ids.length)return;
+      // 選択済みの写真を運んだときだけ選択を解除する（選択外の1枚移動では選択を残す）
+      const usedSelection = ids.some(id=>_selected.has(id));
+      const n=movePhotos(ids, g.id);
+      if(n && usedSelection) _selected.clear();
+      if(n) refreshAll();
     });
     const ids = g.qrPhotoId ? [g.qrPhotoId, ...g.photoIds] : g.photoIds;
     ids.forEach(pid=>{
@@ -11458,15 +11480,43 @@ function renderGroups(){
       // QR写真（区切り）は移動不可。それ以外はドラッグ可能に
       if(!isQR){
         t.setAttribute('draggable','true');
-        t.addEventListener('dragstart', e=>{ _dragPid=p.id; t.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', p.id); });
-        t.addEventListener('dragend', ()=>{ _dragPid=null; t.classList.remove('dragging'); document.querySelectorAll('.group.drop-target').forEach(x=>x.classList.remove('drop-target')); });
+        t.addEventListener('dragstart', e=>{
+          // チェックの入った写真を掴んだら選択全部を、そうでなければその1枚だけ運ぶ
+          _dragIds = _selected.has(p.id) ? [..._selected] : [p.id];
+          e.dataTransfer.effectAllowed='move';
+          e.dataTransfer.setData('text/plain', p.id);
+          // 運ばれる写真すべてに印を付ける
+          _dragIds.forEach(id=>{
+            const el=document.querySelector(`.thumb img[data-pid="${id}"]`);
+            if(el) el.closest('.thumb').classList.add('dragging');
+          });
+          if(_dragIds.length>1) showDragCount(e, _dragIds.length);
+        });
+        t.addEventListener('dragend', ()=>{
+          _dragIds=[];
+          document.querySelectorAll('.thumb.dragging').forEach(x=>x.classList.remove('dragging'));
+          document.querySelectorAll('.group.drop-target').forEach(x=>x.classList.remove('drop-target'));
+          hideDragCount();
+        });
       }
       body.appendChild(t);
     });
     box.appendChild(el);
   });
 }
-let _dragPid=null;
+let _dragIds=[];
+// 複数枚をドラッグしていることを、カーソルの近くに出す
+let _dragBadge=null;
+function showDragCount(e, n){
+  try{
+    _dragBadge=document.createElement('div');
+    _dragBadge.className='drag-count';
+    _dragBadge.textContent=n+'枚を移動';
+    document.body.appendChild(_dragBadge);
+    if(e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(_dragBadge, 60, 16);
+  }catch(err){}
+}
+function hideDragCount(){ if(_dragBadge){ try{_dragBadge.remove();}catch(e){} _dragBadge=null; } }
 // 写真ごとの「失敗」フラグ。台帳には行として残るが、種別が「失敗」になり
 // 振り分け時はコピーされない（Excelマクロと同じ挙動）。看板写真にも指定できる。
 function toggleFailed(pid){
@@ -11500,7 +11550,15 @@ function fillGroupOptions(sel){
   sel.appendChild(frag);
   sel.dataset.filled='1';
 }
-function onMove(pid,gid){ if(!gid)return; movePhoto(pid,gid); refreshAll(); }
+function onMove(pid,gid){
+  if(!gid)return;
+  // チェックの入った写真を操作したなら、選択全部をまとめて移動
+  const usedSelection=_selected.has(pid);
+  const ids = usedSelection ? [..._selected] : [pid];
+  const n=movePhotos(ids, gid);
+  if(n && usedSelection) _selected.clear();
+  refreshAll();
+}
 function addGroupAfter(gid){ const g=createManualGroup(null,gid); refreshAll(); openGroupEditor(g.id); }
 function removeGroup(gid){ if(confirm('このグループを削除しますか？（中の写真は隣のグループへ移動します）')){ deleteGroup(gid); refreshAll(); } }
 
@@ -11782,7 +11840,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.43",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.44",
     savedAt:new Date().toISOString(),
     folder,
     failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
