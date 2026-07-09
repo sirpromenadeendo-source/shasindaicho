@@ -10249,7 +10249,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.44（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.45（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10816,6 +10816,18 @@ function scanQRw(bmp){
   d=rd(grab(0,0,w,h,1200),'attemptBoth'); if(d)return d;
   const fw=w*0.42, fh=h*0.42;
   d=rd(grab(w-fw,h-fh,fw,fh,700)); if(d)return d;
+  // 2×2タイル走査（メインスレッドの scanQR と同じ手順・同じ結果になるように）
+  const n=2, ov=0.25, tw=w/n, th=h/n;
+  const order=[];
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++) order.push([i,j]);
+  const c0=(n-1)/2;
+  order.sort((a,b)=>Math.hypot(a[0]-c0,a[1]-c0)-Math.hypot(b[0]-c0,b[1]-c0));
+  for(const [i,j] of order){
+    const sx=Math.max(0,tw*(i-ov)), sy=Math.max(0,th*(j-ov));
+    const sw=Math.min(w-sx,tw*(1+2*ov)), sh=Math.min(h-sy,th*(1+2*ov));
+    if(sw<1||sh<1) continue;
+    d=rd(grab(sx,sy,sw,sh,1200)); if(d)return d;
+  }
   return null;
 }
 self.onmessage=async (e)=>{
@@ -10919,6 +10931,33 @@ function scanQR(bmp){
   //    二値化は精度が上がらず遅いので取り込み時は行わない（再スキャン側で実施）。
   const fw=w*0.42, fh=h*0.42, sx=w-fw, sy=h-fh;
   d=readId(grab(sx,sy,fw,fh,700)); if(d)return d;
+  // ③ 2×2のタイルに分けて、ほぼ原寸のまま走査する。
+  //    iPhoneなど画面の小さい端末で看板を撮ると、看板が写真幅の2割ほどにしかならず
+  //    QRが200px前後まで小さくなる。全面を1200pxに縮小すると1モジュール1pxになり
+  //    原理的に読めないため、分割して解像度を保つ。
+  //    タイルは25%重ねて、境界にQRがまたがっても拾えるようにする。
+  d=scanQRTiles(bmp, grab, readId, 2, 1200, 0.25); if(d)return d;
+  return null;
+}
+// 画像を n×n のタイルに分けて走査（重なり ov の割合だけ広げて切り出す）
+function scanQRTiles(bmp, grab, readId, n, outW, ov){
+  const w=bmp.width||bmp.naturalWidth, h=bmp.height||bmp.naturalHeight;
+  const tw=w/n, th=h/n;
+  // 中央のタイルから見るほうが当たりやすい（看板は中央寄りに写ることが多い）
+  const order=[];
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++) order.push([i,j]);
+  order.sort((a,b)=>{
+    const c=(n-1)/2;
+    const da=Math.hypot(a[0]-c,a[1]-c), db=Math.hypot(b[0]-c,b[1]-c);
+    return da-db;
+  });
+  for(const [i,j] of order){
+    const sx=Math.max(0, tw*(i-ov)), sy=Math.max(0, th*(j-ov));
+    const sw=Math.min(w-sx, tw*(1+2*ov)), sh=Math.min(h-sy, th*(1+2*ov));
+    if(sw<1||sh<1) continue;
+    const d=readId(grab(sx,sy,sw,sh,outW));
+    if(d) return d;
+  }
   return null;
 }
 // ImageData を Otsu で二値化（その場で書き換えて返す）
@@ -11840,7 +11879,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.44",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.45",
     savedAt:new Date().toISOString(),
     folder,
     failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
