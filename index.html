@@ -10225,7 +10225,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.26（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.27（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -11012,39 +11012,63 @@ async function rescanSelected(){
   alert(msg);
 }
 
-// 選択写真をOCRして、対象1が読めたらグループ作成。読めた項目を看板に入れ、編集モーダルで確認を促す。
+// 選択写真をOCRして看板グループを作成。
+// 読めなくてもグループは必ず作り、件名等は既存グループから引き継いで空欄を手入力できるようにする。
 async function ocrSelected(){
   if(!_selected.size)return;
   const ids=[...photos].filter(p=>_selected.has(p.id)).map(p=>p.id);
   const btn=_d('btnOCR'); btn.disabled=true; _d('btnRescan').disabled=true;
   btn.textContent='OCR準備中…';
-  try{ await loadTesseract(); }
-  catch(e){ alert('OCRエンジンを読み込めませんでした。\n'+e.message); btn.disabled=false; _d('btnRescan').disabled=false; btn.textContent='OCRでグループ作成'; return; }
-  let created=0, failed=[]; let lastGid=null;
+  let ocrReady=false;
+  try{ await loadTesseract(); ocrReady=true; }
+  catch(e){ /* OCR不可でも空グループ作成は続行する */ }
+  const h=commonHeader(); // 件名・調査区分・撮影者・撮影日を既存から引き継ぐ
+  let created=0, withT1=0; let firstBlankGid=null, lastGid=null;
   for(let i=0;i<ids.length;i++){
     const pid=ids[i]; const p=photoById(pid); if(!p||!p.file)continue;
-    btn.textContent=`OCR中… (${i+1}/${ids.length})`;
-    let k=null;
-    try{ const bmp=await loadBitmap(p.file); k=await ocrPhoto(bmp); freeBitmap(bmp); }catch(e){}
-    if(k && k.t1){
-      // 看板扱いに昇格（QR再スキャンと同じ流れ）。OCR由来を記録。
-      p.kanban=k; p.qr=null;
-      promoteToKanban(pid, k);
-      // 生成したグループ（qrPhotoId===pid）を探して source を 'ocr' に
-      const g=state.groups.find(x=>x.qrPhotoId===pid); if(g){ g.source='ocr'; lastGid=g.id; }
-      created++;
-    } else { failed.push(p.name); }
-    await new Promise(r=>setTimeout(r,0));
+    btn.textContent= ocrReady ? `OCR中… (${i+1}/${ids.length})` : `グループ作成中… (${i+1}/${ids.length})`;
+    let r=null;
+    if(ocrReady){
+      try{ const bmp=await loadBitmap(p.file); r=await ocrPhoto(bmp); freeBitmap(bmp); }catch(e){}
+    }
+    r=r||{};
+    // OCRで読めた項目を優先し、空欄は引き継ぎ情報で補う
+    const k={
+      kenmei: r.kenmei || h.kenmei || '',
+      kubun:  r.kubun  || h.kubun  || '',
+      t1:     r.t1     || '',
+      t2:     r.t2     || '',
+      joukyou:r.joukyou|| '',
+      houkou: r.houkou || '',
+      date:   r.date   || h.date   || '',
+      sha:    r.sha    || h.sha    || '',
+      shubetsu: r.shubetsu || '',
+      biko:   r.biko   || ''
+    };
+    p.kanban=k; p.qr=null;
+    promoteToKanban(pid, k);
+    const g=state.groups.find(x=>x.qrPhotoId===pid);
+    if(g){ g.source='ocr'; lastGid=g.id; if(!k.t1 && !firstBlankGid) firstBlankGid=g.id; }
+    created++;
+    if(k.t1) withT1++;
+    await new Promise(r2=>setTimeout(r2,0));
   }
   _selected.clear();
   btn.disabled=false; _d('btnRescan').disabled=false; btn.textContent='OCRでグループ作成';
   refreshAll();
-  let msg=created+'枚をOCRで読み取り、グループを作成しました。';
-  msg+='\n※OCRは誤読することがあります。作成したグループの「看板を編集」で内容を必ず確認してください。';
-  if(failed.length) msg+='\n対象1を読み取れなかった写真: '+failed.length+'枚（手動でグループを作成できます）';
+  const blank=created-withT1;
+  let msg=created+'件のグループを作成しました。';
+  if(ocrReady){
+    msg+=`\n　対象1をOCRで読み取れた: ${withT1}件`;
+    if(blank) msg+=`\n　読み取れず空欄: ${blank}件（「看板を編集」で入力してください）`;
+    msg+='\n※OCRは誤読することがあります。内容を必ず確認してください。';
+  }else{
+    msg+='\n※OCRエンジンを読み込めなかったため、空のグループを作成しました。「看板を編集」で入力してください。';
+  }
   alert(msg);
-  // 最後に作ったグループの編集モーダルを開いて確認を促す
-  if(lastGid) openGroupEditor(lastGid);
+  // 空欄のグループがあればそれを、無ければ最後のグループを開いて確認を促す
+  const openGid=firstBlankGid||lastGid;
+  if(openGid) openGroupEditor(openGid);
 }
 // ある写真を看板に昇格：現グループを分割し、その写真以降を新グループへ
 function promoteToKanban(pid, kanban){
@@ -11207,7 +11231,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.26",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.27",
     savedAt:new Date().toISOString(),
     folder,
     groups: state.groups.map(g=>({
