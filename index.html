@@ -10119,6 +10119,16 @@ header .ver{font-size:12px;font-weight:400;color:#aad;letter-spacing:.02em}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn-white{background:#fff;color:#2c5f8a}
 .btn-green{background:#2ecc71;color:#fff}
+.btn-purple{background:#8e44ad;color:#fff}
+/* 写真振り分け */
+.sort-steps{display:flex;flex-direction:column;gap:10px;margin:14px 0}
+.sort-step{display:flex;align-items:center;gap:10px}
+.sort-num{width:24px;height:24px;border-radius:50%;background:#2c5f8a;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none}
+.dirname{font-size:13px;color:#555;word-break:break-all}
+.sort-summary{background:#eef5fb;border:1px solid #cfe2f3;border-radius:6px;padding:10px 12px;margin:12px 0;font-size:13px;line-height:1.7}
+.warn-box{background:#fff4e5;border:1px solid #ffcc80;border-radius:6px;padding:12px;font-size:13px;line-height:1.7}
+.sort-skip{color:#c0392b}
+.sort-newname{color:#1a5276;word-break:break-all}
 .btn-blue{background:#3498db;color:#fff}
 .btn-orange{background:#e67e22;color:#fff}
 .btn-gray{background:#888;color:#fff}
@@ -10225,13 +10235,14 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.27（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.3（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
     <input type="file" id="stateInput" class="file-input" accept=".json" onchange="loadState(event)">
     <button class="btn btn-orange" id="btnCSV" onclick="exportCSV()" disabled>📥 台帳CSV出力</button>
     <button class="btn btn-green" id="btnXLSX" onclick="exportXLSX()" disabled>📊 台帳Excel出力</button>
+    <button class="btn btn-purple" id="btnSort" onclick="openSortDialog()" disabled>📁 写真振り分け</button>
   </div>
 </header>
 
@@ -10277,13 +10288,68 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
       <table class="ledger">
         <thead><tr>
           <th>連番</th><th>調査区分</th><th>対象1</th><th>対象2</th><th>状況</th><th>方向</th>
-          <th>撮影日</th><th>撮影者</th><th>種別2</th><th>フォルダ</th><th>ファイル名</th><th>備考</th>
+          <th>撮影日</th><th>撮影者</th><th>種別1</th><th>種別2</th><th>フォルダ</th><th>ファイル名</th><th>備考</th>
         </tr></thead>
         <tbody id="ledgerBody"></tbody>
       </table>
     </div>
   </div>
 
+</div>
+
+<!-- 写真振り分け ダイアログ -->
+<div class="modal" id="sortModal">
+  <div class="modal-box" style="max-width:900px">
+    <div class="modal-head">
+      <b>📁 写真振り分け（コピー＆リネーム）</b>
+      <button class="mini-btn" onclick="closeSortDialog()">✕ 閉じる</button>
+    </div>
+    <div class="modal-body">
+      <div id="sortUnsupported" class="warn-box" style="display:none">
+        このブラウザではフォルダ操作が使えません。<strong>Microsoft Edge か Google Chrome</strong> で、
+        <strong>https のページ</strong>（GitHub Pages 等）から開いてください。
+      </div>
+      <div id="sortMain">
+        <p class="hint" style="margin-top:0">
+          台帳の内容にしたがって、写真を<strong>コピー</strong>しながらリネームし、フォルダに振り分けます。
+          元の写真はそのまま残ります（Excelマクロ「写真振り分け」と同じ動作）。
+        </p>
+        <div class="sort-steps">
+          <div class="sort-step">
+            <span class="sort-num">1</span>
+            <button class="btn btn-blue" onclick="pickSrcDir()">コピー元フォルダを選択</button>
+            <span id="srcDirName" class="dirname">未選択</span>
+          </div>
+          <div class="sort-step">
+            <span class="sort-num">2</span>
+            <button class="btn btn-blue" onclick="pickDstDir()">保存先フォルダを選択</button>
+            <span id="dstDirName" class="dirname">未選択</span>
+          </div>
+          <div class="sort-step">
+            <span class="sort-num">3</span>
+            <button class="btn btn-gray" onclick="buildSortPreview()">振り分けプレビューを作成</button>
+          </div>
+        </div>
+        <div id="sortSummary" class="sort-summary" style="display:none"></div>
+        <div id="sortPreviewWrap" style="display:none">
+          <div class="tablewrap" style="max-height:320px">
+            <table class="ledger">
+              <thead><tr><th>元ファイル名</th><th>→</th><th>保存先（フォルダ / 新ファイル名）</th></tr></thead>
+              <tbody id="sortPreviewBody"></tbody>
+            </table>
+          </div>
+          <div class="progress-wrap" id="sortProgressWrap">
+            <div class="progress-bar"><span id="sortProgressBar"></span></div>
+            <div class="progress-text" id="sortProgressText"></div>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+            <button class="btn btn-purple" id="btnRunSort" onclick="runSort()">この内容で実行する</button>
+            <span class="hint">同名ファイルが既にある場合はスキップします。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <canvas id="work" style="display:none"></canvas>
@@ -11093,25 +11159,33 @@ function promoteToKanban(pid, kanban){
 function buildLedger(){
   ledgerRows=[];
   let seq=0;
+  const rowOf=(k,p,shubetsu1,shubetsu2)=>({
+    seq,
+    kubun: k?k.kubun:'',
+    t1: k?k.t1:'',
+    t2: k?k.t2:'',
+    joukyou: k?k.joukyou:'',
+    houkou: k?k.houkou:'',
+    date: k&&k.date?k.date.replace(/-/g,'/'):'',
+    sha: k?k.sha:'',
+    shubetsu1,           // I列：看板（写込）写真のみ「写込」
+    shubetsu: shubetsu2, // J列：種別2（調査・管理…）
+    folder: folderOf(p.path),
+    filename: p.name,
+    biko: k?k.biko:''
+  });
   state.groups.forEach(g=>{
     const k=g.kanban;
+    // ① 看板（QRが写った写込写真）自身も台帳に含める。種別1=写込、種別2は空。
+    if(g.qrPhotoId){
+      const kp=photoById(g.qrPhotoId);
+      if(kp){ seq++; ledgerRows.push(rowOf(k,kp,'写込','')); }
+    }
+    // ② その看板に属する対象写真
     g.photoIds.forEach(pid=>{
       const p=photoById(pid); if(!p)return;
       seq++;
-      ledgerRows.push({
-        seq,
-        kubun: k?k.kubun:'',
-        t1: k?k.t1:'',
-        t2: k?k.t2:'',
-        joukyou: k?k.joukyou:'',
-        houkou: k?k.houkou:'',
-        date: k&&k.date?k.date.replace(/-/g,'/'):'',
-        sha: k?k.sha:'',
-        shubetsu: k?k.shubetsu:'',
-        folder: folderOf(p.path),
-        filename: p.name,
-        biko: k?k.biko:''
-      });
+      ledgerRows.push(rowOf(k,p,'', k?k.shubetsu:''));
     });
   });
   renderLedger();
@@ -11124,6 +11198,7 @@ function renderLedger(){
   _d('cardLedger').style.display= ledgerRows.length?'':'none';
   _d('btnCSV').disabled = ledgerRows.length===0;
   _d('btnXLSX').disabled = ledgerRows.length===0;
+  _d('btnSort').disabled = ledgerRows.length===0;
   _d('btnSaveState').disabled = photos.length===0;
   const tb=_d('ledgerBody'); tb.innerHTML='';
   ledgerRows.forEach(r=>{
@@ -11131,7 +11206,7 @@ function renderLedger(){
     tr.innerHTML=`
       <td class="auto">${r.seq}</td><td>${_esc(r.kubun)}</td><td><b>${_esc(r.t1)}</b></td>
       <td>${_esc(r.t2)}</td><td>${_esc(r.joukyou)}</td><td>${_esc(r.houkou)}</td>
-      <td>${_esc(r.date)}</td><td>${_esc(r.sha)}</td><td>${_esc(r.shubetsu)}</td>
+      <td>${_esc(r.date)}</td><td>${_esc(r.sha)}</td><td>${_esc(r.shubetsu1||'')}</td><td>${_esc(r.shubetsu)}</td>
       <td class="auto">${_esc(r.folder)}</td><td class="auto">${_esc(r.filename)}</td><td>${_esc(r.biko)}</td>`;
     tb.appendChild(tr);
   });
@@ -11231,7 +11306,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.27",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.3",
     savedAt:new Date().toISOString(),
     folder,
     groups: state.groups.map(g=>({
@@ -11285,12 +11360,177 @@ function applyState(data){
 }
 
 // ===== CSV出力（台帳 入力シート列） =====
+// ===== 写真振り分け（コピー＆リネーム） =====
+// Excelマクロ「写真振り分け」と同じ規則：
+//  ・新名 = 〔対象1〕 〔対象2〕 〔状況〕（〔方向〕）_〔種別〕_〔元ファイル名〕.JPG
+//    （対象1・対象2・状況は半角スペース連結、方向は全角カッコ、種別が空なら「調査」）
+//  ・フォルダ = 〔調査区分〕/〔対象1〕   ※種別が 調査/空/メモ/測量 のとき
+//               〔調査区分〕/〔種別〕    ※それ以外（管理・3D・作業風景 等）
+//    調査区分が全行で空なら区分の階層を作らない。空の行は「空白」フォルダ。
+//  ・種別が「失敗」の行はスキップ。同名ファイルが既にあればスキップ（上書きしない）。
+//  ・種別1（写込）は振り分けには使わない。看板写真も対象写真と同じ規則でコピーされる。
+let _srcDir=null, _dstDir=null, _sortPlan=null;
+
+function fsSupported(){ return typeof window.showDirectoryPicker==='function'; }
+function openSortDialog(){
+  if(!ledgerRows.length){ alert('台帳データがありません。'); return; }
+  _d('sortModal').classList.add('show');
+  const ok=fsSupported();
+  _d('sortUnsupported').style.display= ok?'none':'';
+  _d('sortMain').style.display= ok?'':'none';
+}
+function closeSortDialog(){ _d('sortModal').classList.remove('show'); }
+
+// ファイル名・フォルダ名に使えない文字を除去（マクロ StrChk と同じ）
+function strChk(v){
+  let s=(v==null?'':String(v)).trim().replace(/\r?\n/g,'');
+  for(const ch of ['\\','/',':','*','?','"','<','>','|','[',']']) s=s.split(ch).join('');
+  return s;
+}
+// シーン名（マクロ SeaneName と同じ）
+function seaneName(t1,t2,jk,hk,shu){
+  let fn='';
+  if(t1) fn=t1;
+  if(t2) fn = (fn==='') ? t2 : fn+' '+t2;
+  if(jk) fn = (fn==='') ? jk : fn+' '+jk;
+  if(hk) fn = fn+'（'+hk+'）';
+  return shu ? fn+'_'+shu : fn+'_調査';
+}
+// 調査区分が1つでも入っていれば区分フォルダを作る（マクロ CK_Check と同じ）
+function ckCheck(rows){
+  const a=[];
+  for(const r of rows){ const v=(r.kubun||'').trim(); if(v && !a.includes(v)) a.push(v); }
+  return a.join(',');
+}
+// 振り分け計画を組み立てる
+function makeSortPlan(rows){
+  const ck=ckCheck(rows);
+  const plan=[]; const seen=new Map(); // 重複新ファイル名の検出
+  for(const r of rows){
+    const shu=strChk(r.shubetsu); // 種別2（振り分けに使う種別）。種別1（写込）は無視。
+    if(shu==='失敗'){ plan.push({row:r, skip:'種別が「失敗」'}); continue; }
+    const name=String(r.filename||'');
+    const m=name.match(/^(.*?)(\.[^.]*)?$/);
+    const base=strChk(m[1]||name);
+    const ext=(m[2]||'.JPG').toUpperCase();
+    const snam=seaneName(strChk(r.t1),strChk(r.t2),strChk(r.joukyou),strChk(r.houkou),shu);
+    const newName=`${snam}_${base}${ext}`;
+    const isSurvey=(shu==='調査'||shu===''||shu==='メモ'||shu==='測量');
+    const f2=isSurvey?strChk(r.t1):shu;
+    let dir;
+    if(ck){ const f1=strChk(r.kubun)||'空白'; dir=[f1,f2].filter(Boolean); }
+    else  { dir=[f2].filter(Boolean); }
+    const destRel=dir.concat(newName).join('/');
+    const dup=seen.has(destRel); seen.set(destRel,true);
+    plan.push({row:r, srcName:name, dir, newName, destRel, dup});
+  }
+  return {ck, plan};
+}
+
+async function pickSrcDir(){
+  try{
+    _srcDir=await window.showDirectoryPicker({id:'srcdir'});
+    _d('srcDirName').textContent=_srcDir.name;
+  }catch(e){ /* キャンセル */ }
+}
+async function pickDstDir(){
+  try{
+    _dstDir=await window.showDirectoryPicker({id:'dstdir', mode:'readwrite'});
+    _d('dstDirName').textContent=_dstDir.name;
+  }catch(e){ /* キャンセル */ }
+}
+function buildSortPreview(){
+  if(!ledgerRows.length){ alert('台帳データがありません。'); return; }
+  const {ck, plan}=makeSortPlan(ledgerRows);
+  _sortPlan=plan;
+  const copy=plan.filter(p=>!p.skip).length;
+  const skip=plan.filter(p=>p.skip).length;
+  const dup=plan.filter(p=>p.dup).length;
+  const dirs=[...new Set(plan.filter(p=>!p.skip).map(p=>p.dir.join('/')))];
+  let html=`コピー対象：<b>${copy}</b> 件`;
+  if(skip) html+=` ／ スキップ：<b>${skip}</b> 件（種別が「失敗」）`;
+  html+=`<br>作成されるフォルダ：<b>${dirs.length}</b> 個`;
+  html+=`<br>調査区分での振り分け：<b>${ck?'あり（'+_esc(ck)+'）':'なし（対象1／種別のみの1階層）'}</b>`;
+  if(dup) html+=`<br><span class="sort-skip">⚠ 新ファイル名が重複する行が ${dup} 件あります。後の行はスキップされます。</span>`;
+  _d('sortSummary').innerHTML=html;
+  _d('sortSummary').style.display='';
+  const tb=_d('sortPreviewBody'); tb.innerHTML='';
+  plan.forEach(p=>{
+    const tr=document.createElement('tr');
+    if(p.skip){
+      tr.innerHTML=`<td class="auto">${_esc(p.row.filename)}</td><td>→</td><td class="sort-skip">スキップ（${_esc(p.skip)}）</td>`;
+    }else{
+      tr.innerHTML=`<td class="auto">${_esc(p.srcName)}</td><td>→</td><td class="sort-newname">${_esc(p.destRel)}${p.dup?' <span class="sort-skip">（重複）</span>':''}</td>`;
+    }
+    tb.appendChild(tr);
+  });
+  _d('sortPreviewWrap').style.display='';
+}
+// 深い階層のフォルダを作りながら辿る
+async function ensureDir(root, parts){
+  let d=root;
+  for(const name of parts){ d=await d.getDirectoryHandle(name, {create:true}); }
+  return d;
+}
+async function runSort(){
+  if(!_sortPlan){ alert('先に「振り分けプレビューを作成」を押してください。'); return; }
+  if(!_srcDir){ alert('コピー元フォルダを選択してください。'); return; }
+  if(!_dstDir){ alert('保存先フォルダを選択してください。'); return; }
+  const targets=_sortPlan.filter(p=>!p.skip);
+  if(!targets.length){ alert('コピー対象がありません。'); return; }
+  if(!confirm(`${targets.length} 件の写真をコピーします。よろしいですか？\n（元の写真はそのまま残ります）`)) return;
+  const btn=_d('btnRunSort'); btn.disabled=true;
+  const pw=_d('sortProgressWrap'); pw.classList.add('show');
+  let done=0, copied=0, exists=0, notfound=0, errs=[];
+  const t0=performance.now();
+  for(let i=0;i<targets.length;i++){
+    const p=targets[i];
+    const pct=Math.round((i/targets.length)*100);
+    _d('sortProgressBar').style.width=pct+'%';
+    let eta='';
+    if(i>=10){ const per=(performance.now()-t0)/i; eta=' / 残り約'+fmtSec((targets.length-i)*per/1000); }
+    _d('sortProgressText').textContent=`コピー中: ${p.newName}（${i+1}/${targets.length}）${eta}`;
+    try{
+      // 元ファイルを取得（台帳のフォルダ列があればサブフォルダから）
+      let sdir=_srcDir;
+      const sub=strChk(p.row.folder);
+      if(sub){ for(const part of sub.split('/').filter(Boolean)) sdir=await sdir.getDirectoryHandle(part); }
+      let fh;
+      try{ fh=await sdir.getFileHandle(p.srcName); }
+      catch(e){ notfound++; done++; continue; }
+      const file=await fh.getFile();
+      // 保存先フォルダを作成
+      const ddir=await ensureDir(_dstDir, p.dir);
+      // 同名があればスキップ（上書きしない）
+      let already=false;
+      try{ await ddir.getFileHandle(p.newName); already=true; }catch(e){ already=false; }
+      if(already){ exists++; done++; continue; }
+      const out=await ddir.getFileHandle(p.newName, {create:true});
+      const ws=await out.createWritable();
+      await ws.write(file);
+      await ws.close();
+      copied++;
+    }catch(e){ errs.push(p.srcName+': '+e.message); }
+    done++;
+    if(i%10===9) await new Promise(r=>setTimeout(r,0));
+  }
+  _d('sortProgressBar').style.width='100%';
+  const secs=((performance.now()-t0)/1000).toFixed(0);
+  _d('sortProgressText').textContent=`完了（${secs}秒）`;
+  btn.disabled=false;
+  let msg=`振り分けが完了しました。\n　コピー: ${copied} 件`;
+  if(exists) msg+=`\n　スキップ（同名あり）: ${exists} 件`;
+  if(notfound) msg+=`\n　元ファイルが見つからない: ${notfound} 件`;
+  if(errs.length) msg+=`\n　エラー: ${errs.length} 件\n　${errs.slice(0,3).join('\n　')}`;
+  alert(msg);
+}
+
 function exportCSV(){
   if(!ledgerRows.length){alert('台帳データがありません。');return;}
   const head=["連番","調査区分","対象1","対象2","状況","方向","撮影日","撮影者","種別1","種別2","フォルダ","ファイル名","備考"];
   const q=s=>'"'+String(s==null?'':s).replace(/"/g,'""')+'"';
   const rows=ledgerRows.map(r=>[
-    r.seq,r.kubun,r.t1,r.t2,r.joukyou,r.houkou,r.date,r.sha,'写込',r.shubetsu,r.folder,r.filename,r.biko
+    r.seq,r.kubun,r.t1,r.t2,r.joukyou,r.houkou,r.date,r.sha,r.shubetsu1||'',r.shubetsu,r.folder,r.filename,r.biko
   ].map(q).join(','));
   const csv="\uFEFF"+head.map(q).join(',')+"\r\n"+rows.join("\r\n")+"\r\n";
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
@@ -11348,7 +11588,7 @@ async function exportXLSX(){
     ledgerRows.forEach((r,idx)=>{
       const rowNo=idx+2;
       const row=ws.getRow(rowNo); row.height=39;
-      const vals=[r.seq,r.kubun,r.t1,r.t2,r.joukyou,r.houkou,r.date,r.sha,'写込',r.shubetsu,r.folder,r.filename,r.biko];
+      const vals=[r.seq,r.kubun,r.t1,r.t2,r.joukyou,r.houkou,r.date,r.sha,r.shubetsu1||'',r.shubetsu,r.folder,r.filename,r.biko];
       vals.forEach((v,i)=>{
         const c=ws.getCell(rowNo,i+1);
         c.value = (v===''||v==null)?null:v;
