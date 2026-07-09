@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>写真台帳 照合アプリ（PC）</title>
-<script>
+<script id="jsqr-src">
 /* jsQR 1.4.0 (inlined for offline / file:// use) */
 (function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
@@ -10244,7 +10244,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.37（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.4（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10271,6 +10271,23 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
       <label><input type="checkbox" id="optJson"> 看板アプリのJSONを併用（補助）</label>
       <input type="file" id="jsonInput" class="file-input" accept=".json" onchange="loadKanbanJSON(event)">
       <span id="jsonName" class="muted"></span>
+    </div>
+    <div class="opts" style="border-top:1px dashed #ddd;margin-top:8px;padding-top:8px">
+      <label title="QR読み取りを何枚同時に処理するか。多いほど速いがメモリを使います。">
+        並列処理:
+        <select id="optWorkers" onchange="saveWorkerPref()">
+          <option value="0">自動</option>
+          <option value="1">1（並列なし）</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="6">6</option>
+          <option value="8">8</option>
+          <option value="12">12</option>
+          <option value="16">16</option>
+        </select>
+      </label>
+      <span class="muted" id="workerInfo"></span>
     </div>
     <div class="progress-wrap" id="progressWrap">
       <div style="display:flex;align-items:center;gap:10px">
@@ -10542,6 +10559,31 @@ async function ingest(items){
   let lastErr='';
   _importCancel=false;
   const t0=performance.now();
+
+  // ---- ① まず並列（Worker）で走査を試みる ----
+  const nWorkers=Math.min(desiredWorkerCount(), total);
+  let parallel=null;
+  if(nWorkers>1 && workersUsable()){
+    setProgress(0,total,`解析中（${nWorkers}並列）…`);
+    parallel=await scanAllParallel(arr, (done,name)=>{
+      if(done%10===0 || done===total){
+        let eta='';
+        if(done>=20){ const per=(performance.now()-t0)/done; eta=' / 残り約'+fmtSec((total-done)*per/1000); }
+        setProgress(done, total, `解析中（${nWorkers}並列）: ${name}${eta}`);
+      }
+    }, ()=>_importCancel);
+  }
+  if(parallel){
+    for(let i=0;i<total;i++){
+      const it=arr[i], r=parallel[i]||{};
+      const rec={ id:'p'+i, name:it.name, path:it.path, file:it.file||null, handle:it.handle||null,
+                  thumb:null, qr:null, kanban:null, decodeErr:false, scanErr:'' };
+      if(r.err){ rec.decodeErr=true; lastErr='worker: '+r.err; }
+      else { rec.qr=r.qr||null; rec.kanban=parseKanbanQR(rec.qr); }
+      photos.push(rec);
+    }
+  }else{
+  // ---- ② フォールバック：メインスレッドで直列 ----
   for(let i=0;i<total;i++){
     if(_importCancel){ setProgress(i,total,'中断しました'); break; }
     const it=arr[i];
@@ -10568,9 +10610,11 @@ async function ingest(items){
     // UIをたまに解放（数千枚でも固まらないよう）
     if(i%50===49) await new Promise(r=>setTimeout(r,0));
   }
+  }
   window._lastErr=lastErr; // デバッグ用
   const secs=((performance.now()-t0)/1000).toFixed(0);
-  setProgress(total, total, '完了（'+secs+'秒）');
+  const per=total?((performance.now()-t0)/total/1000).toFixed(2):'0';
+  setProgress(total, total, `完了（${secs}秒 / 1枚${per}秒${parallel?` ・${nWorkers}並列`:' ・並列なし'}）`);
   setTimeout(()=>_d('progressWrap').classList.remove('show'),1200);
   buildGroups();
 }
@@ -10590,16 +10634,12 @@ function setProgress(cur,total,msg){
 // 画像を読む。Safari等で createImageBitmap(Blob) が不安定なため、
 // 確実に動く <img>+ObjectURL を主経路にする。返すのは HTMLImageElement か ImageBitmap。
 async function loadBitmap(file){
-  // まず img 要素（全ブラウザで安定）
-  try{
-    return await loadViaImg(file);
-  }catch(e){
-    // フォールバック：createImageBitmap
-    if('createImageBitmap' in window){
-      return await createImageBitmap(file);
-    }
-    throw e;
+  // createImageBitmap を優先。<img> 経由よりデコードが忠実で、QR検出率も速度も上
+  // （実測：<img> では読めない看板が createImageBitmap では読める）。
+  if('createImageBitmap' in window){
+    try{ return await createImageBitmap(file); }catch(e){ /* 古い環境や非対応形式は下へ */ }
   }
+  return await loadViaImg(file);
 }
 function loadViaImg(file){
   return new Promise((res,rej)=>{
@@ -10673,7 +10713,135 @@ async function makeThumbFor(pid){
   }catch(e){ return null; }
 }
 
-// QR走査（取り込み時）：素の全面2段 → 右下の切り出し（素→二値化）。
+// ===== QR走査の並列化（Web Worker プール） =====
+// 実行時に navigator.hardwareConcurrency を見て並列数を決める。
+// メモリのピーク（1枚のデコードで100MB前後）とディスクI/Oの頭打ちを考え、上限を設ける。
+// Worker が使えない／エラーになる環境では、従来どおりメインスレッドで直列処理する。
+let _pool=null;
+
+function autoWorkerCount(){
+  const cores=navigator.hardwareConcurrency||2;
+  if(cores<=2)return 1;              // 2コア以下は並列にしない（UIが固まる）
+  return Math.max(1, Math.min(cores-1, 8)); // UI用に1つ残し、上限8
+}
+function desiredWorkerCount(){
+  const v=parseInt((_d('optWorkers')||{}).value||'0',10);
+  return v>0 ? v : autoWorkerCount();
+}
+function saveWorkerPref(){
+  try{ localStorage.setItem('shasin_workers', _d('optWorkers').value); }catch(e){}
+  updateWorkerInfo();
+}
+function updateWorkerInfo(){
+  const cores=navigator.hardwareConcurrency||'不明';
+  const n=desiredWorkerCount();
+  const auto=(_d('optWorkers').value==='0');
+  _d('workerInfo').textContent=`このPCのコア数: ${cores} ／ 同時処理: ${n}枚${auto?'（自動）':''}`;
+}
+
+// jsQR を含む Worker のソースを組み立てる（ページ内のインライン jsQR を再利用）
+function buildWorkerSource(){
+  const jsqr=document.getElementById('jsqr-src');
+  if(!jsqr) throw new Error('jsQRのソースが見つかりません');
+  return `
+${jsqr.textContent}
+function scanQRw(bmp){
+  const w=bmp.width,h=bmp.height;
+  const grab=(sx,sy,sw,sh,outW)=>{
+    const s=Math.min(2,outW/sw);
+    const cw=Math.max(1,Math.round(sw*s)), ch=Math.max(1,Math.round(sh*s));
+    const c=new OffscreenCanvas(cw,ch);
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(bmp,sx,sy,sw,sh,0,0,cw,ch);
+    return ctx.getImageData(0,0,cw,ch);
+  };
+  const rd=(id,inv)=>{const c=jsQR(id.data,id.width,id.height,{inversionAttempts:inv||'dontInvert'});return c&&c.data?c.data:null;};
+  let d=rd(grab(0,0,w,h,1000)); if(d)return d;
+  d=rd(grab(0,0,w,h,1200),'attemptBoth'); if(d)return d;
+  const fw=w*0.42, fh=h*0.42;
+  d=rd(grab(w-fw,h-fh,fw,fh,700)); if(d)return d;
+  return null;
+}
+self.onmessage=async (e)=>{
+  const {id,file}=e.data;
+  let bmp=null;
+  try{
+    bmp=await createImageBitmap(file);
+    const qr=scanQRw(bmp);
+    self.postMessage({id, qr});
+  }catch(err){
+    self.postMessage({id, err:String(err&&err.message||err)});
+  }finally{ try{ bmp&&bmp.close(); }catch(_){} }
+};`;
+}
+// OffscreenCanvas と Worker が使えるか
+function workersUsable(){
+  return (typeof Worker==='function') && (typeof OffscreenCanvas==='function') && (typeof createImageBitmap==='function');
+}
+function createPool(n){
+  const src=buildWorkerSource();
+  const url=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
+  const workers=[];
+  for(let i=0;i<n;i++) workers.push(new Worker(url));
+  return {workers, url, size:n};
+}
+function destroyPool(){
+  if(!_pool)return;
+  _pool.workers.forEach(w=>{ try{ w.terminate(); }catch(e){} });
+  try{ URL.revokeObjectURL(_pool.url); }catch(e){}
+  _pool=null;
+}
+
+// items（{file|handle,name,path}）をWorkerで並列にQR走査し、順番どおりに結果を返す。
+// onProgress(doneCount, name) が随時呼ばれる。
+// Workerが使えない/失敗したら null を返す（呼び出し側で直列にフォールバック）。
+async function scanAllParallel(items, onProgress, shouldCancel){
+  if(!workersUsable()) return null;
+  const n=Math.min(desiredWorkerCount(), items.length);
+  if(n<=1) return null; // 並列の意味がない
+  let pool;
+  try{ pool=createPool(n); }catch(e){ return null; }
+  _pool=pool;
+  const results=new Array(items.length).fill(undefined);
+  let next=0, done=0, failed=false;
+  try{
+    await new Promise((resolve,reject)=>{
+      const feed=(w)=>{
+        if(shouldCancel&&shouldCancel()){ resolve(); return; }
+        if(next>=items.length){ return; }
+        const i=next++;
+        const it=items[i];
+        // ファイルを読み出してから渡す（handle はメインスレッド側で解決）
+        fileOf(it).then(file=>{
+          w.postMessage({id:i, file});
+        }).catch(err=>{
+          results[i]={qr:null, err:String(err&&err.message||err)};
+          done++;
+          if(onProgress) onProgress(done, it.name);
+          if(done===items.length) resolve(); else feed(w);
+        });
+      };
+      pool.workers.forEach(w=>{
+        w.onerror=(ev)=>{ failed=true; reject(new Error('Worker error: '+(ev.message||''))); };
+        w.onmessage=(e)=>{
+          const {id,qr,err}=e.data;
+          results[id]={qr:qr||null, err:err||''};
+          done++;
+          if(onProgress) onProgress(done, items[id]?items[id].name:'');
+          if(shouldCancel&&shouldCancel()){ resolve(); return; }
+          if(done===items.length) resolve(); else feed(w);
+        };
+        feed(w);
+      });
+    });
+  }catch(e){
+    destroyPool();
+    return null; // 呼び出し側で直列にフォールバック
+  }
+  destroyPool();
+  if(failed) return null;
+  return results;
+}
 // 看板QRは右下固定なので、右下だけを切り出して拡大すれば、全面では小さすぎて
 // 読めないQRが読める（実測：この救済で拾える看板がある）。
 // 4隅すべての二値化は重いわりに追加の効果が無かったため、再スキャン側に置く。
@@ -11476,7 +11644,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.37",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.4",
     savedAt:new Date().toISOString(),
     folder,
     failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
@@ -11815,6 +11983,20 @@ async function exportXLSX(){
     _d('btnXLSX').disabled=false; _d('btnXLSX').textContent='📊 台帳Excel出力';
   }
 }
+
+// 起動時：並列数の設定を復元し、コア数を表示
+(function initWorkerPref(){
+  try{
+    const saved=localStorage.getItem('shasin_workers');
+    if(saved && _d('optWorkers')) _d('optWorkers').value=saved;
+  }catch(e){}
+  if(_d('workerInfo')){
+    updateWorkerInfo();
+    if(!workersUsable()){
+      _d('workerInfo').textContent += '（この環境では並列処理が使えません）';
+    }
+  }
+})();
 </script>
 </body>
 </html>
