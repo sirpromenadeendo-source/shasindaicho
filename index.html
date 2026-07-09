@@ -10274,7 +10274,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.46（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.1.00（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10507,7 +10507,10 @@ function parseKanbanQR(text){
   if(!text) return null;
   const parts = text.split('|');
   if(parts[0] !== 'T1') return null;
-  const g = i => (parts[i]||'').replace(/／/g,'|'); // 置換の復元
+  // 看板側は項目内の半角「|」を全角「／」に置換して送る（区切り文字と衝突するため）。
+  // 「／」を「|」に戻してはいけない。利用者がもともと打った全角スラッシュ（例「第1次／第2次」）
+  // まで「|」に化けてしまうため。半角「|」は「／」のまま受け取る。
+  const g = i => (parts[i]||'');
   return {
     kenmei:g(1), kubun:g(2), t1:g(3), t2:g(4), joukyou:g(5),
     houkou:g(6), date:g(7), sha:g(8), shubetsu:g(9), biko:g(10)
@@ -12106,7 +12109,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.46",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"1.00",
     savedAt:new Date().toISOString(),
     folder,
     failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
