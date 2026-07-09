@@ -10177,6 +10177,15 @@ header .ver{font-size:12px;font-weight:400;color:#aad;letter-spacing:.02em}
 .thumb .cap{font-size:10.5px;padding:3px 5px;background:#f4f7fa;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .thumb .qrbadge{position:absolute;top:4px;left:4px;background:#2ecc71;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px}
 .thumb .exifwarn{position:absolute;top:4px;right:4px;background:#e67e22;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px}
+/* 失敗指定 */
+.thumb .failbadge{position:absolute;top:4px;right:4px;background:#c0392b;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;z-index:2}
+.thumb.failed{outline:3px solid #c0392b;outline-offset:-1px}
+.thumb.failed img{opacity:.45;filter:grayscale(.6)}
+.thumb{position:relative}
+.thumb .imgwrap{position:relative;display:block}
+.thumb .failbtn{position:absolute;right:4px;bottom:4px;z-index:3;font-size:10px;padding:2px 6px;border:1px solid #bbb;border-radius:4px;background:rgba(255,255,255,.9);cursor:pointer;color:#555}
+.thumb .failbtn:hover{background:#fff;border-color:#c0392b;color:#c0392b}
+.thumb .failbtn.on{background:#c0392b;border-color:#c0392b;color:#fff}
 
 /* 台帳プレビュー表 */
 .ledger-wrap{overflow-x:auto}
@@ -10235,7 +10244,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.34（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.0.36（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -10643,10 +10652,9 @@ async function makeThumbFor(pid){
   }catch(e){ return null; }
 }
 
-// QR走査：高速・早期打ち切り。看板は「隅に大きく写す」運用前提。
-// ① 素の全面を数解像度（当たれば即終了。QR無し写真もここで速く抜ける）
-// ② 当たらなければ4隅だけ二値化して軽く救済（全画面タイル総当たりはしない＝速い）
-// 万一の取りこぼしは手動グループ作成で復旧できるため、完璧より速度を優先。
+// QR走査（取り込み時）：素の全面2段のみ。看板は画面いっぱいに写す運用なのでこれで十分。
+// 4隅の二値化救済は重い（1枚あたり+270ms、対象写真にも毎回かかる）ため取り込み時には行わず、
+// 読めなかった写真に対する「選択→再スキャン」(scanQRStrong) 側で実施する。
 function scanQR(bmp){
   const w=bmp.width||bmp.naturalWidth, h=bmp.height||bmp.naturalHeight;
   const canvas=_d('work'); const ctx=canvas.getContext('2d',{willReadFrequently:true});
@@ -10658,6 +10666,23 @@ function scanQR(bmp){
     return ctx.getImageData(0,0,cw,ch);
   };
   const readId=(id,inv)=>{ const code=jsQR(id.data,id.width,id.height,{inversionAttempts:inv||'dontInvert'}); return (code&&code.data)?code.data:null; };
+  // 素の全面（1000→1200both）。看板が写っていればここでほぼ当たる。
+  let d=readId(grab(0,0,w,h,1000)); if(d)return d;
+  d=readId(grab(0,0,w,h,1200),'attemptBoth'); if(d)return d;
+  return null;
+}
+// 4隅を二値化して救済する走査（手動再スキャン用。取り込み時には使わない）
+function scanQRCorners(bmp){
+  const w=bmp.width||bmp.naturalWidth, h=bmp.height||bmp.naturalHeight;
+  const canvas=_d('work'); const ctx=canvas.getContext('2d',{willReadFrequently:true});
+  const grab=(sx,sy,sw,sh,outW)=>{
+    const scale=Math.min(2, outW/sw);
+    const cw=Math.max(1,Math.round(sw*scale)), ch=Math.max(1,Math.round(sh*scale));
+    canvas.width=cw; canvas.height=ch;
+    ctx.drawImage(bmp, sx,sy,sw,sh, 0,0,cw,ch);
+    return ctx.getImageData(0,0,cw,ch);
+  };
+  const readId=id=>{ const code=jsQR(id.data,id.width,id.height,{inversionAttempts:'attemptBoth'}); return (code&&code.data)?code.data:null; };
   const otsu=id=>{
     const d=id.data, n=id.width*id.height, hist=new Uint32Array(256), g=new Uint8ClampedArray(n);
     for(let i=0;i<n;i++){const v=(d[i*4]*0.299+d[i*4+1]*0.587+d[i*4+2]*0.114)|0;g[i]=v;hist[v]++;}
@@ -10667,15 +10692,10 @@ function scanQR(bmp){
     for(let i=0;i<n;i++){const v=g[i]<thr?0:255;d[i*4]=d[i*4+1]=d[i*4+2]=v;}
     return id;
   };
-  // ① 素の全面（1000→1200both。看板が写っていればここでほぼ当たる）
-  let d=readId(grab(0,0,w,h,1000)); if(d)return d;
-  d=readId(grab(0,0,w,h,1200),'attemptBoth'); if(d)return d;
-  // ② 4隅だけ二値化して救済（隅にQRが写る運用のため、全画面タイルは不要）
-  const fw=w*0.42, fh=h*0.42; // 隅の切り出し範囲
-  const corners=[[w-fw,h-fh],[0,h-fh],[w-fw,0],[0,0]]; // 右下・左下・右上・左上
-  for(const [sx,sy] of corners){
-    const dd=readId(otsu(grab(sx,sy,fw,fh, 700)),'attemptBoth');
-    if(dd)return dd;
+  const fw=w*0.42, fh=h*0.42;
+  for(const [sx,sy] of [[w-fw,h-fh],[0,h-fh],[w-fw,0],[0,0]]){
+    const d=readId(otsu(grab(sx,sy,fw,fh,700)));
+    if(d)return d;
   }
   return null;
 }
@@ -10717,6 +10737,7 @@ function claheGray(id, tiles, clip){
 // 強力スキャン：通常のscanQR→ダメならCLAHEを掛けて再挑戦
 function scanQRStrong(bmp){
   const normal=scanQR(bmp); if(normal)return normal;
+  const corners=scanQRCorners(bmp); if(corners)return corners; // 取り込み時には省いた4隅救済
   const w=bmp.width||bmp.naturalWidth, h=bmp.height||bmp.naturalHeight;
   const canvas=_d('work'); const ctx=canvas.getContext('2d',{willReadFrequently:true});
   const grab=(sx,sy,sw,sh,outW)=>{
@@ -11077,13 +11098,18 @@ function renderGroups(){
     ids.forEach(pid=>{
       const p=photoById(pid); if(!p)return;
       const isQR = pid===g.qrPhotoId;
-      const t=document.createElement('div'); t.className='thumb'+(isQR?' is-qr':'')+(_selected.has(pid)?' selected':'');
+      const t=document.createElement('div');
+      t.className='thumb'+(isQR?' is-qr':'')+(_selected.has(pid)?' selected':'')+(p.failed?' failed':'');
       const cached=_thumbCache.get(pid)||'';
       t.innerHTML=`
         ${p.kanban?'<span class="qrbadge">QR</span>':''}
         ${p.decodeErr?'<span class="exifwarn">読込不可</span>':''}
+        ${p.failed?'<span class="failbadge">失敗</span>':''}
         ${isQR?'':`<label class="selchk" title="再スキャン用に選択"><input type="checkbox" ${_selected.has(pid)?'checked':''} onchange="toggleSelect('${pid}',this.checked)"></label>`}
-        <img class="ph" data-pid="${pid}" src="${cached}" alt="" draggable="false">
+        <div class="imgwrap">
+          <img class="ph" data-pid="${pid}" src="${cached}" alt="" draggable="false">
+          <button class="failbtn${p.failed?' on':''}" title="この写真を「失敗」にする（振り分け時にコピーされません）" onclick="toggleFailed('${pid}')">${p.failed?'失敗を解除':'失敗にする'}</button>
+        </div>
         <div class="cap" title="${_esc(p.name)}">${_esc(p.name)}</div>
         ${isQR?'':`<div class="move"><select data-gid="${g.id}" data-pid="${p.id}" onfocus="fillGroupOptions(this)" onchange="onMove('${p.id}',this.value)"><option value="">▷ 別グループへ移動</option></select></div>`}`;
       // 未生成のサムネはObserverで表示時に生成
@@ -11100,6 +11126,24 @@ function renderGroups(){
   });
 }
 let _dragPid=null;
+// 写真ごとの「失敗」フラグ。台帳には行として残るが、種別が「失敗」になり
+// 振り分け時はコピーされない（Excelマクロと同じ挙動）。看板写真にも指定できる。
+function toggleFailed(pid){
+  const p=photoById(pid); if(!p)return;
+  p.failed=!p.failed;
+  refreshAll();
+}
+// 失敗ボタン上ではドラッグを開始しない
+document.addEventListener('mousedown', e=>{
+  if(e.target && e.target.classList && e.target.classList.contains('failbtn')){
+    const t=e.target.closest('.thumb'); if(t) t.setAttribute('draggable','false');
+  }
+}, true);
+document.addEventListener('mouseup', e=>{
+  document.querySelectorAll('.thumb[draggable="false"]').forEach(t=>{
+    if(!t.classList.contains('is-qr')) t.setAttribute('draggable','true');
+  });
+}, true);
 // 「別グループへ移動」の選択肢は、実際に開いたときだけ作る。
 // （全写真×全グループ分を事前生成すると 5000枚×250グループ = 125万要素で数秒固まるため）
 function fillGroupOptions(sel){
@@ -11255,7 +11299,8 @@ function buildLedger(){
     date: k&&k.date?k.date.replace(/-/g,'/'):'',
     sha: k?k.sha:'',
     shubetsu1,           // I列：看板（写込）写真のみ「写込」
-    shubetsu: shubetsu2, // J列：種別2（調査・管理…）
+    // J列：種別2。失敗指定された写真は「失敗」（振り分け時にコピーされない）
+    shubetsu: p.failed ? '失敗' : shubetsu2,
     folder: folderOf(p.path),
     filename: p.name,
     biko: k?k.biko:''
@@ -11396,9 +11441,10 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"0.34",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"0.36",
     savedAt:new Date().toISOString(),
     folder,
+    failedFiles: photos.filter(p=>p.failed).map(p=>p.name),
     groups: state.groups.map(g=>({
       kanban:g.kanban, source:g.source,
       qrFile: g.qrPhotoId ? (photoById(g.qrPhotoId)||{}).name : null,
@@ -11444,6 +11490,9 @@ function applyState(data){
     groups.push({ id:newGid(), kanban:null, source:'manual', qrPhotoId:null, photoIds:orphan.map(p=>p.id) });
   }
   state.groups=groups;
+  // 失敗指定の復元（ファイル名で対応）
+  const failedSet=new Set(data.failedFiles||[]);
+  photos.forEach(p=>{ p.failed = failedSet.has(p.name); });
   refreshAll();
   const miss = data.groups.reduce((n,sg)=>n+(sg.files||[]).filter(fn=>!byName.has(fn)).length,0);
   alert('作業状態を復元しました。'+(orphan.length?`\n（JSONに無い写真 ${orphan.length}枚を末尾グループにまとめました）`:'')+(miss?`\n（現フォルダに無いファイル ${miss}件は無視しました）`:''));
