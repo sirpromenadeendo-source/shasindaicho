@@ -10290,7 +10290,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.1.01（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.1.02（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -11421,9 +11421,21 @@ function commonHeader(){
   return { kenmei:pick('kenmei'), kubun:pick('kubun'), sha:pick('sha'), date:pick('date') };
 }
 // 新規グループを作成。件名・調査区分などは既存から引き継ぐ。
+// 撮影日は「直前のグループ」の日付を優先する（発掘は同じ日に連続して撮ることが多いため）。
 function createManualGroup(kanban, afterGid){
   const h=commonHeader();
-  const base={ kenmei:h.kenmei, kubun:h.kubun, t1:'', t2:'', joukyou:'', houkou:'', date:h.date, sha:h.sha, shubetsu:'', biko:'' };
+  // 直前グループ（afterGid で指定されたグループ）の日付・件名などを優先的に引き継ぐ
+  let prev=null;
+  if(afterGid){ prev=state.groups.find(x=>x.id===afterGid) || null; }
+  const pk=(prev&&prev.kanban)?prev.kanban:null;
+  const base={
+    kenmei: (pk&&pk.kenmei) || h.kenmei,
+    kubun:  (pk&&pk.kubun)  || h.kubun,
+    t1:'', t2:'', joukyou:'', houkou:'',
+    date:   (pk&&pk.date)   || h.date,   // ← 直前グループの撮影日を優先
+    sha:    (pk&&pk.sha)    || h.sha,
+    shubetsu:'', biko:''
+  };
   const g={ id:newGid(), kanban:Object.assign(base, kanban||{}), source:'manual', qrPhotoId:null, photoIds:[] };
   if(afterGid){
     const i=state.groups.findIndex(x=>x.id===afterGid);
@@ -12196,7 +12208,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"1.01",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"1.02",
     savedAt:new Date().toISOString(),
     folder,
     masters:{ prefix:[...KANBAN_MASTERS.prefix], taishou2:[...KANBAN_MASTERS.taishou2],
