@@ -10290,7 +10290,7 @@ table.ledger td.auto{color:#1a6bb5;font-weight:600}
 <body>
 
 <header>
-  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.1.02（PC用）</span></h1>
+  <h1>🖥 写真台帳 照合アプリ <span class="ver">ver.1.03（PC用）</span></h1>
   <div style="display:flex;gap:8px">
     <button class="btn btn-white" style="border:1px solid #ccc" id="btnSaveState" onclick="saveState()" disabled>💾 作業を保存</button>
     <button class="btn btn-white" style="border:1px solid #ccc" onclick="document.getElementById('stateInput').click()">📂 作業を復元</button>
@@ -11748,16 +11748,21 @@ async function ocrSelected(){
       try{ const bmp=await loadBitmap(await fileOf(p)); r=await ocrPhoto(bmp); freeBitmap(bmp); }catch(e){}
     }
     r=r||{};
+    // この写真が今属しているグループ（＝昇格後の「直前」になるグループ）から、
+    // 件名・調査区分・撮影者・撮影日を引き継ぐ。OCRで読めた値があればそちらを優先。
+    const prevG=state.groups.find(x=>x.photoIds.includes(pid));
+    const pk=(prevG&&prevG.kanban)?prevG.kanban:null;
+    const inh=key=> (pk&&pk[key]) || h[key] || '';
     // OCRで読めた項目を優先し、空欄は引き継ぎ情報で補う
     const k={
-      kenmei: r.kenmei || h.kenmei || '',
-      kubun:  r.kubun  || h.kubun  || '',
+      kenmei: r.kenmei || inh('kenmei'),
+      kubun:  r.kubun  || inh('kubun'),
       t1:     r.t1     || '',
       t2:     r.t2     || '',
       joukyou:r.joukyou|| '',
       houkou: r.houkou || '',
-      date:   r.date   || h.date   || '',
-      sha:    r.sha    || h.sha    || '',
+      date:   r.date   || inh('date'),   // ← 直前(元グループ)の撮影日を優先
+      sha:    r.sha    || inh('sha'),
       shubetsu: r.shubetsu || '',
       biko:   r.biko   || ''
     };
@@ -12208,7 +12213,7 @@ function saveState(){
   if(!photos.length){alert('写真がありません。');return;}
   const folder = folderOf(photos[0].path) || '';
   const data={
-    app:'写真台帳照合アプリ', kind:'workstate', version:"1.02",
+    app:'写真台帳照合アプリ', kind:'workstate', version:"1.03",
     savedAt:new Date().toISOString(),
     folder,
     masters:{ prefix:[...KANBAN_MASTERS.prefix], taishou2:[...KANBAN_MASTERS.taishou2],
